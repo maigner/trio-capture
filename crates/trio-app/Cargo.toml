@@ -1,0 +1,25 @@
+[package]
+name = "trio-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trio-capture"
+path = "src/main.rs"
+
+[dependencies]
+trio-core = { path = "../trio-core" }
+trio-media = { path = "../trio-media" }
+anyhow.workspace = true
+serde_json.workspace = true
+crossbeam-channel.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+eframe = { version = "0.35", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+egui = "0.35"
+egui-wgpu = "0.35"
+wgpu = "29"
+bytemuck = { version = "1", features = ["derive"] }
+rfd = "0.17"
+rayon.workspace = true

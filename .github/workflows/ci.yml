@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libasound2-dev
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      - name: Sync check on synthetic footage
+        run: |
+          python3 tools/make-testdata.py
+          T=testdata/generated
+          ./target/debug/trio-capture new $T/test.trio.json --cam $T/cam1 --cam $T/cam2 --cam $T/cam3 --wav $T/master.wav
+          ./target/debug/trio-capture sync $T/test.trio.json | tee sync.txt
+          python3 - <<'PY'
+          import json, re
+          exp = json.load(open("testdata/generated/expected.json"))
+          got = {m[1]: float(m[2]) for m in re.finditer(r"(\S+\.mp4)\s+offset\s+([-\d.]+)s", open("sync.txt").read())}
+          bad = {k: (v, got.get(k)) for k, v in exp.items() if k not in got or abs(got[k] - v) > 0.02}
+          assert not bad, bad
+          print("sync offsets within 20 ms:", got)
+          PY

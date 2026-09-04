@@ -1,0 +1,9 @@
+prefix=/usr
+libdir=${prefix}/lib/x86_64-linux-gnu
+includedir=${prefix}/include
+
+Name: alsa
+Description: Advanced Linux Sound Architecture (dev shim, see .cargo/config.toml)
+Version: 1.2.11
+Libs: -L${pcfiledir} -lasound
+Cflags: -I${includedir}

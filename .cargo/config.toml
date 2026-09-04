@@ -1,0 +1,5 @@
+# Linux dev shim: lets the `alsa-sys` crate (via cpal) link against the
+# system's runtime libasound when libasound2-dev is not installed.
+# Installing libasound2-dev makes this unnecessary; the shim is harmless then.
+[env]
+PKG_CONFIG_PATH = { value = "tools/alsa-shim", relative = true }
