@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use trio_core::discover::discover_shoot;
 use trio_core::sync::Placement;
+use trio_core::Grade;
 use trio_core::{project, Orientation, Project};
 use trio_media::ffmpeg::HwAccel;
 
@@ -44,6 +45,10 @@ pub struct App {
     pub sync_progress: (usize, usize),
     pub grading: bool,
     pub grade_progress: (usize, usize),
+    /// What the last auto grade produced, so the Grade tab can undo edits.
+    pub auto_grades: Option<[Grade; 3]>,
+    /// Preview without any grade, toggled on the Grade tab.
+    pub show_original: bool,
     sync_unmatched: Vec<String>,
     /// Folder scans still running for an "Open folder" import.
     pending_scans: usize,
@@ -106,6 +111,8 @@ impl App {
             sync_progress: (0, 0),
             grading: false,
             grade_progress: (0, 0),
+            auto_grades: None,
+            show_original: false,
             sync_unmatched: Vec::new(),
             pending_scans: 0,
             auto_sync: false,
@@ -142,6 +149,8 @@ impl App {
         self.dirty = false;
         self.pending_scans = 0;
         self.auto_sync = false;
+        self.auto_grades = None;
+        self.show_original = false;
     }
 
     /// One folder holds everything: a subfolder per camera and the master
@@ -344,7 +353,7 @@ impl App {
             .project
             .cameras
             .iter()
-            .all(|c| c.grade == trio_core::Grade::default());
+            .all(|c| c.grade == Grade::default());
         if untouched && trio_media::grade::sample_total(&self.project) > 0 {
             self.start_auto_grade();
         }
@@ -471,11 +480,20 @@ impl App {
                 self.grading = false;
                 match result {
                     Ok(grades) => {
-                        for (cam, g) in self.project.cameras.iter_mut().zip(grades) {
+                        let mut auto = [Grade::default(); 3];
+                        for ((cam, slot), g) in self
+                            .project
+                            .cameras
+                            .iter_mut()
+                            .zip(auto.iter_mut())
+                            .zip(grades)
+                        {
                             cam.grade = g;
+                            *slot = g;
                         }
+                        self.auto_grades = Some(auto);
                         self.dirty = true;
-                        self.status = "Auto grade applied; fine-tune on the Grade tab".into();
+                        self.status = "Cameras matched; fine-tune on the Grade tab".into();
                     }
                     Err(e) => {
                         self.status = "Auto grade failed".into();
@@ -567,7 +585,15 @@ impl App {
                 }
             }
         }
-        self.comp.render(&self.preview, &self.project);
+        if self.show_original {
+            let mut ungraded = self.project.clone();
+            for c in ungraded.cameras.iter_mut() {
+                c.grade = Grade::default();
+            }
+            self.comp.render(&self.preview, &ungraded);
+        } else {
+            self.comp.render(&self.preview, &self.project);
+        }
         if self.clock.is_playing() || self.streams.busy() {
             ctx.request_repaint();
         } else if self.streams_have_pending_frames() {
@@ -647,6 +673,9 @@ impl eframe::App for App {
         let ctx = &root.ctx().clone();
         for r in self.jobs.poll() {
             self.apply_job(r);
+        }
+        if self.tab != Tab::Grade {
+            self.show_original = false;
         }
         if let Some((t, play)) = self.startup {
             if self.wav.is_some() || self.project.wav.is_none() {

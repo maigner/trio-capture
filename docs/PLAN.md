@@ -381,3 +381,13 @@ sides are loaded. The Sync tab with its button and per-clip offset fields is
 gone; offsets are corrected by dragging clips on the timeline, and the match
 confidence stays visible there. Opening a folder or a project switches to the
 Layout tab.
+
+## Grade tab for non-technical users (2026-09-04)
+
+The Grade tab is a "Colour" page: one button to match the cameras, five
+plain-language sliders (brightness, contrast, colour, warmth, tint) with word
+labels at the ends instead of numbers, *Back to automatic* per camera,
+*Show original* to compare with the ungraded picture, and double-click on a
+slider to reset it alone. Lift/gamma/gain, "use this look for all cameras" and
+"reset all" live under *More*. The app keeps the last auto-grade result
+(`App::auto_grades`) so undo returns to it rather than to neutral.

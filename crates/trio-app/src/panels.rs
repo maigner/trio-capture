@@ -369,18 +369,76 @@ fn layout_icon(ui: &mut egui::Ui, layout: LayoutId, selected: bool) {
     }
 }
 
+/// A plain-language slider: a name and what the two ends mean, no number.
+struct Look {
+    name: &'static str,
+    low: &'static str,
+    high: &'static str,
+    range: std::ops::RangeInclusive<f32>,
+    logarithmic: bool,
+}
+
+impl Look {
+    /// Double-click puts the value back to `auto`.
+    fn show(&self, ui: &mut egui::Ui, value: &mut f32, auto: f32) -> bool {
+        let mut changed = false;
+        ui.add_space(4.0);
+        ui.label(self.name);
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [54.0, 18.0],
+                egui::Label::new(RichText::new(self.low).weak().small()),
+            );
+            ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(80.0);
+            let resp = ui
+                .add(
+                    egui::Slider::new(value, self.range.clone())
+                        .show_value(false)
+                        .logarithmic(self.logarithmic),
+                )
+                .on_hover_text("Double-click to go back to the automatic value");
+            changed |= resp.changed();
+            if resp.double_clicked() {
+                *value = auto;
+                changed = true;
+            }
+            ui.label(RichText::new(self.high).weak().small());
+        });
+        changed
+    }
+}
+
+const fn look(
+    name: &'static str,
+    low: &'static str,
+    high: &'static str,
+    range: std::ops::RangeInclusive<f32>,
+    logarithmic: bool,
+) -> Look {
+    Look {
+        name,
+        low,
+        high,
+        range,
+        logarithmic,
+    }
+}
+
 fn grade_tab(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Grade");
-    ui.label("Grades belong to a camera and show in every slot it occupies. Click a slot in the preview to pick its camera.");
-    ui.add_space(4.0);
+    ui.heading("Colour");
+    ui.label(
+        "The cameras are matched to each other automatically. Pick a camera and move the \
+         sliders until it looks right; the preview follows.",
+    );
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!app.grading, |ui| {
             if ui
-                .button("Auto grade all cameras")
+                .button("Match cameras automatically")
                 .on_hover_text(
-                    "Measures a few frames of every camera and sets exposure, contrast, \
-                     saturation and colour balance so the cameras match. Runs by itself \
-                     after sync while the grades are untouched.",
+                    "Looks at a few frames of every camera and sets brightness, contrast, \
+                     colour and warmth so the cameras fit together. Your own changes are \
+                     replaced.",
                 )
                 .clicked()
             {
@@ -390,62 +448,111 @@ fn grade_tab(app: &mut App, ui: &mut egui::Ui) {
         if app.grading {
             ui.spinner();
             ui.label(format!(
-                "Analysing {}/{} frames…",
+                "looking at frame {}/{}…",
                 app.grade_progress.0, app.grade_progress.1
             ));
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
+    ui.label("Camera");
     ui.horizontal(|ui| {
         for i in 0..3 {
             let name = app.project.cameras[i].name.clone();
             ui.selectable_value(&mut app.selected_camera, i, name);
         }
     });
-    ui.add_space(6.0);
+    ui.weak("or click a camera in the preview");
+
     let cam = app.selected_camera.min(2);
+    let auto = app.auto_grades.map(|a| a[cam]).unwrap_or_default();
     let mut grade = app.project.cameras[cam].grade;
     let g: &mut Grade = &mut grade;
     let mut changed = false;
-    changed |= ui
-        .add(egui::Slider::new(&mut g.exposure, -3.0..=3.0).text("exposure (stops)"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.contrast, 0.5..=2.0).text("contrast"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.saturation, 0.0..=2.0).text("saturation"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.temperature, -1.0..=1.0).text("temperature"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.tint, -1.0..=1.0).text("tint"))
-        .changed();
-    ui.separator();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.lift, -0.25..=0.25).text("lift (shadows)"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.gamma, 0.5..=2.0).text("gamma (mids)"))
-        .changed();
-    changed |= ui
-        .add(egui::Slider::new(&mut g.gain, 0.5..=2.0).text("gain (highlights)"))
-        .changed();
-    ui.add_space(6.0);
+    changed |= look("Brightness", "darker", "brighter", -2.0..=2.0, false).show(
+        ui,
+        &mut g.exposure,
+        auto.exposure,
+    );
+    changed |= look("Contrast", "soft", "punchy", 0.5..=2.0, true).show(
+        ui,
+        &mut g.contrast,
+        auto.contrast,
+    );
+    changed |= look("Colour", "muted", "vivid", 0.0..=2.0, false).show(
+        ui,
+        &mut g.saturation,
+        auto.saturation,
+    );
+    changed |= look("Warmth", "cooler", "warmer", -1.0..=1.0, false).show(
+        ui,
+        &mut g.temperature,
+        auto.temperature,
+    );
+    changed |= look("Tint", "green", "magenta", -1.0..=1.0, false).show(ui, &mut g.tint, auto.tint);
+    ui.add_space(10.0);
     ui.horizontal(|ui| {
-        if ui.button("Reset").clicked() {
-            *g = Grade::default();
+        let undo_label = if app.auto_grades.is_some() {
+            "Back to automatic"
+        } else {
+            "Back to neutral"
+        };
+        if ui
+            .add_enabled(*g != auto, egui::Button::new(undo_label))
+            .on_hover_text("Throws away your changes to this camera")
+            .clicked()
+        {
+            *g = auto;
             changed = true;
         }
-        if ui.button("Copy to other cameras").clicked() {
-            let copy = *g;
-            for c in app.project.cameras.iter_mut() {
-                c.grade = copy;
-            }
-            changed = true;
-        }
+        ui.toggle_value(&mut app.show_original, "Show original")
+            .on_hover_text("Preview the cameras as they were recorded, to compare");
     });
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new("More")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label("Shadows, mid-tones and highlights separately.");
+            changed |= look("Shadows", "darker", "lighter", -0.25..=0.25, false).show(
+                ui,
+                &mut g.lift,
+                auto.lift,
+            );
+            changed |= look("Mid-tones", "darker", "lighter", 0.5..=2.0, true).show(
+                ui,
+                &mut g.gamma,
+                auto.gamma,
+            );
+            changed |= look("Highlights", "darker", "lighter", 0.5..=2.0, true).show(
+                ui,
+                &mut g.gain,
+                auto.gain,
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Use this look for all cameras")
+                    .on_hover_text("Copies this camera's settings to the other two")
+                    .clicked()
+                {
+                    let copy = *g;
+                    for c in app.project.cameras.iter_mut() {
+                        c.grade = copy;
+                    }
+                    changed = true;
+                }
+                if ui
+                    .button("Reset all cameras")
+                    .on_hover_text("Removes every colour change from all cameras")
+                    .clicked()
+                {
+                    for c in app.project.cameras.iter_mut() {
+                        c.grade = Grade::default();
+                    }
+                    *g = Grade::default();
+                    changed = true;
+                }
+            });
+        });
     app.project.cameras[cam].grade = grade;
     app.dirty |= changed;
 }

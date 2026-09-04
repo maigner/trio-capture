@@ -48,9 +48,13 @@ cargo build --release
    clips of a camera together). The app then switches to the Layout tab.
 3. **Layout** tab: choose horizontal or vertical and a preset, assign cameras
    to slots. In the preview, drag inside a slot to pan and scroll to zoom.
-4. **Grade** tab: click a slot to pick its camera, then adjust exposure,
-   contrast, saturation, temperature, tint and lift/gamma/gain. The grade
-   follows the camera into every slot it occupies.
+4. **Grade** tab: the cameras are matched to each other automatically after
+   sync. Click a slot to pick its camera, then move the plain sliders
+   (brightness, contrast, colour, warmth, tint) until it looks right;
+   *Show original* compares with the recording, *Back to automatic* drops
+   your changes, and double-clicking a slider resets just that one. *More*
+   holds shadows, mid-tones and highlights. The grade follows the camera into
+   every slot it occupies.
 5. **Export** tab: resolution, frame rate, codec, output file, range, go.
    Export runs inside the app with a progress bar and can be cancelled.
 
