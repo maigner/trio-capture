@@ -291,12 +291,32 @@ fn step_summary(app: &App, step: Step) -> String {
             format!("{} · {}", app.project.layout.label(), names.join(", "))
         }
         Step::Colour => {
+            let has_clips = app.project.cameras.iter().any(|c| !c.clips.is_empty());
+            let untouched = app
+                .project
+                .cameras
+                .iter()
+                .all(|c| c.grade == Grade::default());
             if app.grading {
                 "matching the cameras…".into()
-            } else if app.auto_grades.is_some() {
-                "cameras matched automatically".into()
+            } else if let Some(auto) = &app.auto_grades {
+                let edited = app
+                    .project
+                    .cameras
+                    .iter()
+                    .zip(auto.iter())
+                    .any(|(c, a)| c.grade != *a);
+                if edited {
+                    "matched automatically, then adjusted by hand".into()
+                } else {
+                    "matched automatically".into()
+                }
+            } else if !has_clips {
+                "happens by itself once the shoot is opened".into()
+            } else if untouched {
+                "will be matched once the clips are lined up".into()
             } else {
-                "not matched yet".into()
+                "adjusted by hand".into()
             }
         }
         Step::Export => {
@@ -720,8 +740,8 @@ const fn look(
 
 fn colour_step(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
-        "The cameras are matched to each other automatically. Pick a camera and move the \
-         sliders until it looks right; the preview follows.",
+        "The cameras were matched to each other by themselves when the shoot was opened. \
+         Pick a camera and move the sliders until it looks right; the preview follows.",
     );
     ui.add_space(6.0);
     if primary_button(ui, "Match cameras automatically", !app.grading)

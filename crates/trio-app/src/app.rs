@@ -45,9 +45,9 @@ pub struct App {
     pub sync_progress: (usize, usize),
     pub grading: bool,
     pub grade_progress: (usize, usize),
-    /// What the last auto grade produced, so the Grade tab can undo edits.
+    /// What the last auto grade produced, so the Colour step can undo edits.
     pub auto_grades: Option<[Grade; 3]>,
-    /// Preview without any grade, toggled on the Grade tab.
+    /// Preview without any grade, toggled in the Colour step.
     pub show_original: bool,
     sync_unmatched: Vec<String>,
     /// Folder scans still running for an "Open folder" import.
@@ -332,7 +332,7 @@ impl App {
     }
 
     /// Measure every camera and set matching grades. Runs after auto-sync
-    /// while the grades are still untouched, and from the Grade tab.
+    /// while the grades are still untouched, and from the Colour step.
     pub fn start_auto_grade(&mut self) {
         if self.grading {
             return;
@@ -493,7 +493,7 @@ impl App {
                         }
                         self.auto_grades = Some(auto);
                         self.dirty = true;
-                        self.status = "Cameras matched; fine-tune on the Grade tab".into();
+                        self.status = "Cameras matched; fine-tune in step 3".into();
                     }
                     Err(e) => {
                         self.status = "Auto grade failed".into();
