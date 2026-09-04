@@ -62,7 +62,10 @@ cargo build --release
 
 Keyboard: Space play/pause, Left/Right one frame, Shift+Left/Right one
 second, Home/End, I and O set the export range at the playhead, Ctrl+S saves.
-Timeline: Ctrl+scroll zooms, Shift+scroll pans, click the ruler to seek.
+Timeline: Ctrl+scroll, pinch or the +/− keys zoom around the pointer or
+playhead, 0 or *Fit* shows the whole recording, Shift+scroll pans, click the
+ruler to seek. Clips sit where the automatic sync put them and cannot be
+dragged.
 
 ## Headless commands
 

@@ -40,29 +40,74 @@ impl Timeline {
         self.wave_cache = None;
     }
 
-    /// Returns a requested seek time. Sets `changed` when a clip was moved.
+    /// Show the whole recording.
+    fn fit(&mut self, duration: f64) {
+        self.start = 0.0;
+        self.end = duration.max(10.0) * 1.02;
+        self.initialized = true;
+    }
+
+    /// Scale the visible span by `factor` (< 1 zooms in), keeping `anchor`
+    /// at the same place on screen.
+    fn zoom_by(&mut self, factor: f64, anchor: f64, duration: f64) {
+        let span = (self.end - self.start).max(0.01);
+        let new_span = (span * factor).clamp(0.5, duration.max(10.0) * 4.0);
+        let frac = ((anchor - self.start) / span).clamp(0.0, 1.0);
+        self.start = anchor - frac * new_span;
+        self.end = self.start + new_span;
+    }
+
+    /// Returns a requested seek time. The tracks are read-only: clip
+    /// positions come from the automatic sync and are never dragged.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        project: &mut Project,
+        project: &Project,
         wav: Option<&WavData>,
         playhead: f64,
         duration: f64,
-        changed: &mut bool,
     ) -> Option<f64> {
         let mut seek = None;
-        // Transport row.
+        if !self.initialized || self.end <= self.start {
+            self.fit(duration);
+        }
+
+        // Transport row with zoom buttons.
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(fmt_time(playhead)).monospace().size(18.0));
             ui.label(egui::RichText::new(format!("/ {}", fmt_time(duration))).monospace());
             ui.separator();
-            ui.label("Space play/pause · Left/Right frame · Shift+Left/Right second · Home/End · I/O range · Ctrl+scroll zoom · Shift+scroll pan · drag clips to nudge");
+            if ui.button("−").on_hover_text("Zoom out (−)").clicked() {
+                self.zoom_by(1.5, playhead, duration);
+            }
+            if ui.button("+").on_hover_text("Zoom in (+)").clicked() {
+                self.zoom_by(1.0 / 1.5, playhead, duration);
+            }
+            if ui.button("Fit").on_hover_text("Show the whole recording (0)").clicked() {
+                self.fit(duration);
+            }
+            ui.separator();
+            ui.weak("Space play/pause · Left/Right frame · Home/End · I/O range · Ctrl+scroll or +/− zoom · Shift+scroll pan");
         });
 
-        if !self.initialized || self.end <= self.start {
-            self.start = 0.0;
-            self.end = duration.max(10.0) * 1.02;
-            self.initialized = true;
+        // Keyboard zoom, unless a text field is being edited.
+        if !ui.ctx().text_edit_focused() {
+            let (zoom_in, zoom_out, fit) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
+                    i.key_pressed(egui::Key::Minus),
+                    i.key_pressed(egui::Key::Num0),
+                )
+            });
+            if zoom_in {
+                self.zoom_by(1.0 / 1.5, playhead, duration);
+            }
+            if zoom_out {
+                self.zoom_by(1.5, playhead, duration);
+            }
+            if fit {
+                self.fit(duration);
+            }
         }
 
         let height = RULER_H + WAVE_H + TRACK_H * 3.0 + 6.0;
@@ -74,19 +119,21 @@ impl Timeline {
         let span = (self.end - self.start).max(0.01);
         let t_of = |x: f32| self.start + ((x - rect.min.x) / rect.width()) as f64 * span;
 
-        // Zoom / pan with the wheel.
+        // Zoom / pan with the wheel. egui turns Ctrl+wheel (and pinch
+        // gestures) into `zoom_delta` and removes it from the scroll delta,
+        // so zoom must be read from there.
         if ui.rect_contains_pointer(rect) {
-            let (scroll, mods, pos) =
-                ui.input(|i| (i.smooth_scroll_delta, i.modifiers, i.pointer.hover_pos()));
-            if mods.command || mods.ctrl {
-                if scroll.y != 0.0 {
-                    let anchor = pos.map(|p| t_of(p.x)).unwrap_or(playhead);
-                    let factor = (1.0 - scroll.y as f64 * 0.003).clamp(0.5, 2.0);
-                    let new_span = (span * factor).clamp(0.5, duration.max(10.0) * 4.0);
-                    let frac = (anchor - self.start) / span;
-                    self.start = anchor - frac * new_span;
-                    self.end = self.start + new_span;
-                }
+            let (zoom, scroll, mods, pos) = ui.input(|i| {
+                (
+                    i.zoom_delta(),
+                    i.smooth_scroll_delta,
+                    i.modifiers,
+                    i.pointer.hover_pos(),
+                )
+            });
+            if zoom != 1.0 {
+                let anchor = pos.map(|p| t_of(p.x)).unwrap_or(playhead);
+                self.zoom_by(1.0 / zoom as f64, anchor, duration);
             } else {
                 let dx = if scroll.x != 0.0 {
                     scroll.x
@@ -202,7 +249,6 @@ impl Timeline {
             Color32::from_rgb(110, 190, 120),
             Color32::from_rgb(120, 140, 220),
         ];
-        let frame = 1.0 / project.output.fps;
         for cam in 0..3 {
             let y0 = wave.max.y + cam as f32 * TRACK_H + 2.0;
             let track = Rect::from_min_size(
@@ -217,11 +263,7 @@ impl Timeline {
                 egui::FontId::proportional(10.0),
                 Color32::from_gray(120),
             );
-            let shift_all = ui.input(|i| i.modifiers.shift);
-            let mut shift_delta: Option<f64> = None;
-            let n = project.cameras[cam].clips.len();
-            for idx in 0..n {
-                let clip = project.cameras[cam].clips[idx].clone();
+            for clip in &project.cameras[cam].clips {
                 let x0 = x_of(clip.offset).max(rect.min.x);
                 let x1 = x_of(clip.end()).min(rect.max.x);
                 if x1 <= rect.min.x || x0 >= rect.max.x {
@@ -231,9 +273,13 @@ impl Timeline {
                     Pos2::new(x0, track.min.y + 2.0),
                     Pos2::new(x1, track.max.y - 2.0),
                 );
-                let id = ui.id().with(("clip", cam, idx));
-                let r = ui.interact(block, id, Sense::click_and_drag());
-                let mut fill = colors[cam].gamma_multiply(if r.hovered() { 0.9 } else { 0.65 });
+                let r = ui.interact(
+                    block,
+                    ui.id().with(("clip", cam, clip.offset.to_bits())),
+                    Sense::hover(),
+                );
+                let hovered = r.hovered();
+                let mut fill = colors[cam].gamma_multiply(if hovered { 0.9 } else { 0.65 });
                 if let Some(c) = clip.sync_confidence {
                     if c < 0.3 {
                         fill = Color32::from_rgb(180, 70, 70);
@@ -260,30 +306,16 @@ impl Timeline {
                     egui::FontId::proportional(10.0),
                     Color32::WHITE,
                 );
-                if r.dragged() {
-                    let dt = r.drag_delta().x as f64 / rect.width() as f64 * span;
-                    if dt != 0.0 {
-                        if shift_all {
-                            shift_delta = Some(dt);
-                        } else {
-                            project.cameras[cam].clips[idx].offset += dt;
-                            *changed = true;
-                        }
-                    }
-                }
-                if r.drag_stopped() {
-                    // Snap to the frame grid when the drag ends.
-                    let c = &mut project.cameras[cam].clips[idx];
-                    c.offset = (c.offset / frame).round() * frame;
-                    *changed = true;
-                }
-                r.on_hover_text(format!("{}\noffset {:.3}s, {:.1}s long\ndrag to nudge, Shift+drag moves all clips of this camera", clip.file_name(), clip.offset, clip.duration));
-            }
-            if let Some(dt) = shift_delta {
-                for c in project.cameras[cam].clips.iter_mut() {
-                    c.offset += dt;
-                }
-                *changed = true;
+                let sync = match clip.sync_confidence {
+                    Some(c) => format!("synced to the audio, {:.0}% confidence", c * 100.0),
+                    None => "not synced yet".to_string(),
+                };
+                r.on_hover_text(format!(
+                    "{}\nstarts at {}, {:.1}s long\n{sync}",
+                    clip.file_name(),
+                    fmt_time(clip.offset),
+                    clip.duration
+                ));
             }
         }
 

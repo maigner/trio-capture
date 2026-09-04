@@ -399,3 +399,15 @@ tab shows the chosen layout as a large picture with the camera name in every
 slot; a click cycles the slot to the next camera, and a row of camera buttons
 per slot does the same explicitly. *Rotate cameras* and *Reset framing* are the
 only other controls.
+
+## Timeline: read-only clips, working zoom (2026-09-04)
+
+- Clip blocks no longer drag. Offsets come only from the automatic sync, so a
+  stray drag can no longer break the alignment. `Timeline::show` takes
+  `&Project` and the `changed` flag is gone.
+- Ctrl+scroll zoom never worked: egui folds Ctrl+wheel (and pinch gestures)
+  into `InputState::zoom_delta()` and leaves `smooth_scroll_delta` at zero, so
+  the handler saw nothing. Zoom now reads `zoom_delta()` and is anchored at the
+  pointer.
+- Added `−`, `+` and `Fit` buttons on the transport row and the `+`/`=`, `−`
+  and `0` keys (anchored at the playhead) so zoom is reachable without a wheel.

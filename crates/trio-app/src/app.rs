@@ -723,15 +723,8 @@ impl eframe::App for App {
                 let t = self.clock.time();
                 let dur = self.duration();
                 let wav = self.wav.as_ref();
-                let mut changed = false;
-                if let Some(seek) =
-                    self.timeline
-                        .show(ui, &mut self.project, wav, t, dur, &mut changed)
-                {
+                if let Some(seek) = self.timeline.show(ui, &self.project, wav, t, dur) {
                     self.seek(seek);
-                }
-                if changed {
-                    self.project_changed();
                 }
             });
         egui::CentralPanel::default().show(root, |ui| preview::show(self, ui));
