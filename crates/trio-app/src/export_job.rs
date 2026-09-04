@@ -11,13 +11,18 @@ use trio_media::ffmpeg::HwAccel;
 
 pub const EXPORT_MAX_EDGE: u32 = 4096;
 
-pub fn export_spec_for(project: &Project, out: &Path, duration: f64) -> ExportSpec {
+pub fn export_spec_for(
+    project: &Project,
+    out: &Path,
+    duration: f64,
+    hwaccel: HwAccel,
+) -> ExportSpec {
     let (w, h) = project.output_size();
     ExportSpec {
         width: w,
         height: h,
         fps: project.output.fps,
-        codec: project.output.codec,
+        codec: hwaccel.resolve_codec(&project.output),
         quality: project.output.quality,
         out_path: out.to_path_buf(),
         wav: project.wav.clone(),
@@ -53,7 +58,7 @@ impl ExportJob {
             .path
             .clone()
             .ok_or_else(|| anyhow::anyhow!("no output path"))?;
-        let spec = export_spec_for(project, &out, duration);
+        let spec = export_spec_for(project, &out, duration, hwaccel);
         let encoder = Encoder::start(&spec)?;
         let target = comp.create_target(spec.width, spec.height);
         Ok(Self {

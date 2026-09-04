@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use trio_core::{Codec, OutputSettings};
 
 pub fn ffmpeg_path() -> String {
     std::env::var("TRIO_FFMPEG").unwrap_or_else(|_| "ffmpeg".into())
@@ -18,6 +19,35 @@ pub enum HwAccel {
 }
 
 impl HwAccel {
+    /// The graphics card encoder that goes with this decode backend, if any.
+    pub fn gpu_codec(self, h265: bool) -> Option<Codec> {
+        match self {
+            HwAccel::None => None,
+            HwAccel::Vaapi | HwAccel::VaapiGpuScale => Some(if h265 {
+                Codec::H265Vaapi
+            } else {
+                Codec::H264Vaapi
+            }),
+            HwAccel::VideoToolbox | HwAccel::VideoToolboxGpuScale => Some(if h265 {
+                Codec::H265VideoToolbox
+            } else {
+                Codec::H264VideoToolbox
+            }),
+        }
+    }
+
+    /// The encoder an export uses: the project's own choice, or with
+    /// `auto_encoder` the graphics card when one was detected and the
+    /// processor otherwise.
+    pub fn resolve_codec(self, output: &OutputSettings) -> Codec {
+        if output.auto_encoder {
+            let h265 = output.codec.is_h265();
+            self.gpu_codec(h265).unwrap_or(Codec::software(h265))
+        } else {
+            output.codec
+        }
+    }
+
     /// Arguments placed before `-i`.
     pub fn input_args(self) -> Vec<&'static str> {
         match self {

@@ -422,10 +422,15 @@ editor. It shows three rows of plain choices:
   the current encoder engine (software, VAAPI, VideoToolbox).
 - **Quality**: Good / Better / Best, mapped to CRF or QP 23 / 20 / 17. A
   project with another value simply highlights none of the three.
-- **More** (collapsed): frame rate and the encoder, *Processor* or
-  *Graphics card*. The graphics card choice is only enabled when hardware
-  decoding was detected, and maps to VAAPI on Linux and VideoToolbox on macOS
-  through `app.hwaccel`.
+- **More** (collapsed): frame rate and the encoder, *Automatic* (default),
+  *Processor* or *Graphics card*. `OutputSettings::auto_encoder` (serde
+  default true, so old project files pick it up) means the engine is resolved
+  at export time by `HwAccel::resolve_codec`: the graphics card encoder that
+  matches the detected decode backend (VAAPI on Linux, VideoToolbox on macOS),
+  else the software encoder of the chosen format. The manual choices clear
+  the flag and store the concrete `Codec`. Both the in-app export job and the
+  CLI export go through `export_spec_for(.., hwaccel)`, and the CLI prints
+  the encoder it picked.
 
 The Range section is gone. The exported part is set only with the I and O
 keys on the timeline; the tab states what will be exported ("whole

@@ -187,7 +187,6 @@ fn cmd_export(args: &[String]) -> Result<()> {
     } else {
         proj.duration(wav_duration) - proj.range.start
     };
-    let spec = export_spec_for(&proj, &out, duration);
     let hwaccel = proj
         .cameras
         .iter()
@@ -195,13 +194,15 @@ fn cmd_export(args: &[String]) -> Result<()> {
         .next()
         .map(|c| detect_hwaccel(&c.path))
         .unwrap_or_default_none();
+    let spec = export_spec_for(&proj, &out, duration, hwaccel);
     println!(
-        "export {}x{} @ {} fps, {:.2}s, decode: {}",
+        "export {}x{} @ {} fps, {:.2}s, decode: {}, encode: {}",
         w,
         h,
         spec.fps,
         duration,
-        hwaccel.label()
+        hwaccel.label(),
+        spec.codec.label()
     );
 
     let mut encoder = Encoder::start(&spec)?;

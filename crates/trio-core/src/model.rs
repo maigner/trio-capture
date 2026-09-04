@@ -247,6 +247,38 @@ impl Codec {
         Codec::H264VideoToolbox,
         Codec::H265VideoToolbox,
     ];
+    pub fn is_h265(self) -> bool {
+        matches!(
+            self,
+            Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
+        )
+    }
+
+    pub fn is_gpu(self) -> bool {
+        !matches!(self, Codec::H264Software | Codec::H265Software)
+    }
+
+    /// The software encoder for this format.
+    pub fn software(h265: bool) -> Codec {
+        if h265 {
+            Codec::H265Software
+        } else {
+            Codec::H264Software
+        }
+    }
+
+    /// Same encoder engine, other format.
+    pub fn with_h265(self, h265: bool) -> Codec {
+        match (self, h265) {
+            (Codec::H264Software | Codec::H265Software, false) => Codec::H264Software,
+            (Codec::H264Software | Codec::H265Software, true) => Codec::H265Software,
+            (Codec::H264Vaapi | Codec::H265Vaapi, false) => Codec::H264Vaapi,
+            (Codec::H264Vaapi | Codec::H265Vaapi, true) => Codec::H265Vaapi,
+            (Codec::H264VideoToolbox | Codec::H265VideoToolbox, false) => Codec::H264VideoToolbox,
+            (Codec::H264VideoToolbox | Codec::H265VideoToolbox, true) => Codec::H265VideoToolbox,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Codec::H264Software => "H.264 (libx264, software)",
@@ -265,10 +297,19 @@ pub struct OutputSettings {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
+    /// The encoder to use when `auto_encoder` is off; otherwise only its
+    /// format (H.264 or H.265) matters and the engine is picked at export.
     pub codec: Codec,
+    /// Use the graphics card encoder whenever one was detected.
+    #[serde(default = "default_true")]
+    pub auto_encoder: bool,
     /// Quality knob: CRF for software encoders, QP for hardware ones.
     pub quality: u32,
     pub path: Option<PathBuf>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for OutputSettings {
@@ -278,6 +319,7 @@ impl Default for OutputSettings {
             height: 1080,
             fps: 30.0,
             codec: Codec::H264Software,
+            auto_encoder: true,
             quality: 18,
             path: None,
         }

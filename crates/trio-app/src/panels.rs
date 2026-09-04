@@ -3,7 +3,6 @@ use crate::timeline::fmt_time;
 use egui::{Color32, RichText};
 use std::path::PathBuf;
 use trio_core::{Codec, Grade, LayoutId, Orientation};
-use trio_media::ffmpeg::HwAccel;
 
 /// The four steps of the sidebar, shown top to bottom in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,20 +257,22 @@ fn step_summary(app: &App, step: Step) -> String {
                 3840 => "4K",
                 _ => "custom size",
             };
-            let format = if matches!(
-                o.codec,
-                Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
-            ) {
+            let format = if o.codec.is_h265() {
                 "Smaller file"
             } else {
                 "Standard"
+            };
+            let engine = if app.hwaccel.resolve_codec(o).is_gpu() {
+                "graphics card"
+            } else {
+                "processor"
             };
             let file = o
                 .path
                 .as_ref()
                 .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
                 .unwrap_or_else(|| "no output file yet".into());
-            format!("{size} · {format} · {file}")
+            format!("{size} · {format} · {engine} · {file}")
         }
     }
 }
@@ -844,17 +845,14 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.label("Format");
     ui.horizontal(|ui| {
-        let h265 = matches!(
-            o.codec,
-            Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
-        );
+        let h265 = o.codec.is_h265();
         if ui
             .selectable_label(!h265, "Standard")
             .on_hover_text("H.264: plays on every device and website")
             .clicked()
             && h265
         {
-            o.codec = with_h265(o.codec, false);
+            o.codec = o.codec.with_h265(false);
             dirty = true;
         }
         if ui
@@ -863,7 +861,7 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
             .clicked()
             && !h265
         {
-            o.codec = with_h265(o.codec, true);
+            o.codec = o.codec.with_h265(true);
             dirty = true;
         }
     });
@@ -880,7 +878,10 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
-    if matches!(o.codec, Codec::H264VideoToolbox | Codec::H265VideoToolbox) {
+    if matches!(
+        hw.resolve_codec(o),
+        Codec::H264VideoToolbox | Codec::H265VideoToolbox
+    ) {
         ui.weak("The graphics card encoder picks its own quality; this setting has no effect.");
     }
 
@@ -901,49 +902,61 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
             });
             ui.horizontal(|ui| {
                 ui.label("Encoder");
-                let h265 = matches!(
-                    o.codec,
-                    Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
-                );
-                let gpu = matches!(
-                    o.codec,
-                    Codec::H264Vaapi
-                        | Codec::H265Vaapi
-                        | Codec::H264VideoToolbox
-                        | Codec::H265VideoToolbox
-                );
+                let h265 = o.codec.is_h265();
+                let gpu_codec = hw.gpu_codec(h265);
+                let auto_hint = match gpu_codec {
+                    Some(_) => "Uses the graphics card, which was found on this computer",
+                    None => "Uses the processor: no graphics card encoder was found",
+                };
                 if ui
-                    .selectable_label(!gpu, "Processor")
-                    .on_hover_text("Slower, works on every computer")
+                    .selectable_label(o.auto_encoder, "Automatic")
+                    .on_hover_text(auto_hint)
                     .clicked()
-                    && gpu
+                    && !o.auto_encoder
                 {
-                    o.codec = if h265 {
-                        Codec::H265Software
-                    } else {
-                        Codec::H264Software
-                    };
+                    o.auto_encoder = true;
                     dirty = true;
                 }
-                let gpu_codec = gpu_codec(h265, hw);
+                let manual_gpu = !o.auto_encoder && o.codec.is_gpu();
+                let manual_cpu = !o.auto_encoder && !o.codec.is_gpu();
+                if ui
+                    .selectable_label(manual_cpu, "Processor")
+                    .on_hover_text("Slower, works on every computer")
+                    .clicked()
+                    && !manual_cpu
+                {
+                    o.codec = Codec::software(h265);
+                    o.auto_encoder = false;
+                    dirty = true;
+                }
                 ui.add_enabled_ui(gpu_codec.is_some(), |ui| {
                     if ui
-                        .selectable_label(gpu, "Graphics card")
+                        .selectable_label(manual_gpu, "Graphics card")
                         .on_hover_text(if gpu_codec.is_some() {
-                            "Much faster; if the export fails, switch back to Processor"
+                            "Much faster; if the export fails, switch to Processor"
                         } else {
                             "No graphics card encoder was found on this computer"
                         })
                         .clicked()
-                        && !gpu
+                        && !manual_gpu
                     {
                         if let Some(c) = gpu_codec {
                             o.codec = c;
+                            o.auto_encoder = false;
                             dirty = true;
                         }
                     }
                 });
             });
+            let used = hw.resolve_codec(o);
+            ui.weak(format!(
+                "Will use the {}.",
+                if used.is_gpu() {
+                    "graphics card"
+                } else {
+                    "processor"
+                }
+            ));
         });
 
     ui.add_space(6.0);
@@ -1017,34 +1030,5 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
     if let Some(job) = &app.export {
         ui.add(egui::ProgressBar::new(job.progress()).show_percentage());
         ui.label(job.status());
-    }
-}
-
-/// Same encoder engine, other format.
-fn with_h265(c: Codec, h265: bool) -> Codec {
-    match (c, h265) {
-        (Codec::H264Software | Codec::H265Software, false) => Codec::H264Software,
-        (Codec::H264Software | Codec::H265Software, true) => Codec::H265Software,
-        (Codec::H264Vaapi | Codec::H265Vaapi, false) => Codec::H264Vaapi,
-        (Codec::H264Vaapi | Codec::H265Vaapi, true) => Codec::H265Vaapi,
-        (Codec::H264VideoToolbox | Codec::H265VideoToolbox, false) => Codec::H264VideoToolbox,
-        (Codec::H264VideoToolbox | Codec::H265VideoToolbox, true) => Codec::H265VideoToolbox,
-    }
-}
-
-/// The graphics-card encoder for this platform, if hardware decoding was detected.
-fn gpu_codec(h265: bool, hw: HwAccel) -> Option<Codec> {
-    match hw {
-        HwAccel::None => None,
-        HwAccel::Vaapi | HwAccel::VaapiGpuScale => Some(if h265 {
-            Codec::H265Vaapi
-        } else {
-            Codec::H264Vaapi
-        }),
-        HwAccel::VideoToolbox | HwAccel::VideoToolboxGpuScale => Some(if h265 {
-            Codec::H265VideoToolbox
-        } else {
-            Codec::H264VideoToolbox
-        }),
     }
 }

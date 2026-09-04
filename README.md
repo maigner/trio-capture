@@ -62,8 +62,9 @@ open; the others show a one-line summary and can be clicked at any time.
    camera into every slot it occupies.
 4. **Export the video**: pick a size (Full HD, 2K, 4K), a format (*Standard*
    H.264 or *Smaller file* H.265) and a quality (Good, Better, Best), choose
-   the output file, go. *More* holds the frame rate and the choice between
-   the processor and the graphics card encoder. The whole recording is
+   the output file, go. The graphics card encoder is used
+   by itself whenever one is found; *More* holds the frame rate and lets you
+   force the processor or the graphics card instead. The whole recording is
    exported unless you mark a part with the I and O keys on the timeline;
    the step shows what will be exported. Export runs inside the app with a
    progress bar and can be cancelled.
