@@ -42,6 +42,8 @@ pub struct App {
     pub export: Option<ExportJob>,
     pub syncing: bool,
     pub sync_progress: (usize, usize),
+    pub grading: bool,
+    pub grade_progress: (usize, usize),
     sync_unmatched: Vec<String>,
     /// Folder scans still running for an "Open folder" import.
     pending_scans: usize,
@@ -99,6 +101,8 @@ impl App {
             export: None,
             syncing: false,
             sync_progress: (0, 0),
+            grading: false,
+            grade_progress: (0, 0),
             sync_unmatched: Vec::new(),
             pending_scans: 0,
             auto_sync: false,
@@ -300,6 +304,34 @@ impl App {
             .sync(wav.mono8k.clone(), self.project.cameras.clone());
     }
 
+    /// Measure every camera and set matching grades. Runs after auto-sync
+    /// while the grades are still untouched, and from the Grade tab.
+    pub fn start_auto_grade(&mut self) {
+        if self.grading {
+            return;
+        }
+        let total = trio_media::grade::sample_total(&self.project);
+        if total == 0 {
+            self.error = Some("Nothing to grade: no clips on the timeline".into());
+            return;
+        }
+        self.grading = true;
+        self.grade_progress = (0, total);
+        self.status = format!("Auto grading 0/{total} frames…");
+        self.jobs.auto_grade(self.project.clone(), self.hwaccel);
+    }
+
+    fn maybe_auto_grade(&mut self) {
+        let untouched = self
+            .project
+            .cameras
+            .iter()
+            .all(|c| c.grade == trio_core::Grade::default());
+        if untouched && trio_media::grade::sample_total(&self.project) > 0 {
+            self.start_auto_grade();
+        }
+    }
+
     pub fn duration(&self) -> f64 {
         self.project.duration(self.wav.as_ref().map(|w| w.duration))
     }
@@ -389,6 +421,30 @@ impl App {
                 };
                 self.sync_unmatched.clear();
                 self.project_changed();
+                self.maybe_auto_grade();
+            }
+            JobResult::GradeProgress => {
+                self.grade_progress.0 += 1;
+                self.status = format!(
+                    "Auto grading {}/{} frames…",
+                    self.grade_progress.0, self.grade_progress.1
+                );
+            }
+            JobResult::Graded(result) => {
+                self.grading = false;
+                match result {
+                    Ok(grades) => {
+                        for (cam, g) in self.project.cameras.iter_mut().zip(grades) {
+                            cam.grade = g;
+                        }
+                        self.dirty = true;
+                        self.status = "Auto grade applied; fine-tune on the Grade tab".into();
+                    }
+                    Err(e) => {
+                        self.status = "Auto grade failed".into();
+                        self.error = Some(format!("Auto grade: {e:#}"));
+                    }
+                }
             }
             JobResult::HwAccel(h) => {
                 self.hwaccel = h;

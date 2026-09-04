@@ -312,3 +312,23 @@ as sRGB bytes, was right. `Target::display_view` is now a `Rgba8Unorm`
 reinterpretation of the same texture (`view_formats`) and is the view egui
 draws. Preview and export now agree in mean luma to within a few percent. Grades
 tuned against the old dark preview come out too bright and need revisiting.
+
+Auto grade (2026-09-04): once sync has finished (and the grades are still
+untouched), the app measures every camera and sets matching grades; the Grade
+tab has an "Auto grade all cameras" button and `trio-capture grade
+<project>` does the same headless. `trio_media::grade::auto_grade` grabs
+eight 320 px frames per camera (`decoder::grab_frame`, one ffmpeg call each,
+in parallel) at moments all cameras cover, restricted to the part of the
+frame the slot actually shows (`autograde::visible_region` mirrors the
+shader's cover fit, zoom and pan). `trio_core::autograde::solve` then
+derives, per camera: exposure so the mean display luma meets the cameras'
+average (clamped to 0.28..0.50, with a highlight guard on the 90th
+percentile), contrast from the 5..95 percentile spread (0.95..1.3),
+saturation from the mean chroma (0.8..1.5), and temperature/tint that move
+the linear R/G and B/G ratios halfway toward the cameras' median. Targets
+come from the footage itself, so a dark gig stays dark and stage colours
+survive; the half-strength balance keeps a pink-lit drummer from being
+neutralised against a warm bar. `Grade::apply` is a CPU mirror of the
+shader used by the unit tests. On the gig project the three cameras land
+within a few percent in mean luma and the analysis takes about a second
+with VAAPI.

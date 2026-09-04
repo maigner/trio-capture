@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use trio_core::discover::scan_folder;
 use trio_core::sync::{Arranged, Master, SYNC_RATE};
-use trio_core::{Camera, Clip};
+use trio_core::{Camera, Clip, Grade, Project};
 use trio_media::audio::decode_pcm;
 use trio_media::ffmpeg::{detect_hwaccel, HwAccel};
 
@@ -34,6 +34,9 @@ pub enum JobResult {
     },
     SyncFinished,
     HwAccel(HwAccel),
+    /// One sample frame has been analysed for the auto grade (progress only).
+    GradeProgress,
+    Graded(Result<Vec<Grade>>),
 }
 
 pub struct JobHub {
@@ -57,7 +60,10 @@ impl JobHub {
     pub fn poll(&mut self) -> Vec<JobResult> {
         let out: Vec<_> = self.rx.try_iter().collect();
         for r in &out {
-            if !matches!(r, JobResult::Synced { .. } | JobResult::SyncProgress) {
+            if !matches!(
+                r,
+                JobResult::Synced { .. } | JobResult::SyncProgress | JobResult::GradeProgress
+            ) {
                 self.running = self.running.saturating_sub(1);
             }
         }
@@ -118,6 +124,17 @@ impl JobHub {
                 }
             }
             let _ = tx.send(JobResult::SyncFinished);
+        });
+    }
+
+    pub fn auto_grade(&mut self, project: Project, hwaccel: HwAccel) {
+        let ctx = self.ctx.clone();
+        self.spawn(move |tx| {
+            let result = trio_media::grade::auto_grade(&project, hwaccel, &|| {
+                let _ = tx.send(JobResult::GradeProgress);
+                ctx.request_repaint();
+            });
+            let _ = tx.send(JobResult::Graded(result));
         });
     }
 

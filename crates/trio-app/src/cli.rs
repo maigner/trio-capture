@@ -18,6 +18,7 @@ pub fn run(args: &[String]) -> Result<()> {
         "new" => cmd_new(&args[1..]),
         "sync" => cmd_sync(&args[1..]),
         "export" => cmd_export(&args[1..]),
+        "grade" => cmd_grade(&args[1..]),
         "probe" => {
             for p in &args[1..] {
                 println!("{:#?}", trio_core::probe::probe_clip(Path::new(p))?);
@@ -34,6 +35,7 @@ fn usage() -> anyhow::Error {
          trio-capture new <out.trio.json> --cam DIR --cam DIR --cam DIR [--wav FILE]\n  \
          trio-capture sync <project.trio.json>\n  \
          trio-capture export <project.trio.json> [--out FILE]\n  \
+         trio-capture grade <project.trio.json>\n  \
          trio-capture probe FILE..."
     )
 }
@@ -127,6 +129,31 @@ fn cmd_sync(args: &[String]) -> Result<()> {
             clip.sync_confidence = Some(r.confidence);
         }
     }
+    project::save(&proj, &path)?;
+    Ok(())
+}
+
+/// Measure the cameras and store matching grades in the project.
+fn cmd_grade(args: &[String]) -> Result<()> {
+    let path = PathBuf::from(args.first().ok_or_else(usage)?);
+    let mut proj = project::load(&path)?;
+    let hwaccel = proj
+        .cameras
+        .iter()
+        .flat_map(|c| c.clips.first())
+        .next()
+        .map(|c| detect_hwaccel(&c.path))
+        .unwrap_or_default_none();
+    let started = std::time::Instant::now();
+    let grades = trio_media::grade::auto_grade(&proj, hwaccel, &|| {})?;
+    for (cam, g) in proj.cameras.iter_mut().zip(grades) {
+        println!(
+            "{:<12} exposure {:+.2}  contrast {:.2}  saturation {:.2}  temperature {:+.2}  tint {:+.2}",
+            cam.name, g.exposure, g.contrast, g.saturation, g.temperature, g.tint
+        );
+        cam.grade = g;
+    }
+    println!("analysed in {:.1}s", started.elapsed().as_secs_f64());
     project::save(&proj, &path)?;
     Ok(())
 }

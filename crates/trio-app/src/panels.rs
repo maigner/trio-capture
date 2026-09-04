@@ -468,6 +468,30 @@ fn layout_icon(ui: &mut egui::Ui, layout: LayoutId, selected: bool) {
 fn grade_tab(app: &mut App, ui: &mut egui::Ui) {
     ui.heading("Grade");
     ui.label("Grades belong to a camera and show in every slot it occupies. Click a slot in the preview to pick its camera.");
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(!app.grading, |ui| {
+            if ui
+                .button("Auto grade all cameras")
+                .on_hover_text(
+                    "Measures a few frames of every camera and sets exposure, contrast, \
+                     saturation and colour balance so the cameras match. Runs by itself \
+                     after sync while the grades are untouched.",
+                )
+                .clicked()
+            {
+                app.start_auto_grade();
+            }
+        });
+        if app.grading {
+            ui.spinner();
+            ui.label(format!(
+                "Analysing {}/{} frames…",
+                app.grade_progress.0, app.grade_progress.1
+            ));
+        }
+    });
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         for i in 0..3 {
             let name = app.project.cameras[i].name.clone();

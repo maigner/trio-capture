@@ -20,7 +20,10 @@ fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(first) = args.first() {
-        if matches!(first.as_str(), "new" | "sync" | "export" | "probe") {
+        if matches!(
+            first.as_str(),
+            "new" | "sync" | "export" | "grade" | "probe"
+        ) {
             return cli::run(&args);
         }
     }

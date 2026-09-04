@@ -1,6 +1,7 @@
 //! Project model, media discovery, layouts and audio sync math.
 //! No GPU or UI code lives here so everything is unit-testable.
 
+pub mod autograde;
 pub mod discover;
 pub mod layout;
 pub mod model;

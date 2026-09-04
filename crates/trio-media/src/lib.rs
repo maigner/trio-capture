@@ -5,5 +5,6 @@ pub mod audio;
 pub mod decoder;
 pub mod export;
 pub mod ffmpeg;
+pub mod grade;
 pub mod player;
 pub mod sync;
