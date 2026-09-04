@@ -59,6 +59,12 @@ pub struct App {
     startup: Option<(f64, bool)>,
     /// `--export`: start the export as soon as the project is loaded.
     startup_export: bool,
+    /// `--screenshot FILE`: once the preview has settled, save the window
+    /// there and quit. The counter is the number of quiet frames still to
+    /// wait so every camera has its picture up.
+    startup_screenshot: Option<(PathBuf, u32)>,
+    /// `--step N`: open this step once the project is loaded.
+    startup_step: Option<Step>,
 }
 
 impl App {
@@ -68,6 +74,8 @@ impl App {
         start_at: Option<f64>,
         autoplay: bool,
         autoexport: bool,
+        screenshot: Option<PathBuf>,
+        step: Option<Step>,
     ) -> Self {
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu render state");
         let comp = Arc::new(Compositor::new(rs.device.clone(), rs.queue.clone()));
@@ -123,6 +131,8 @@ impl App {
                 None
             }),
             startup_export: autoexport,
+            startup_screenshot: screenshot.map(|p| (p, SCREENSHOT_SETTLE_FRAMES)),
+            startup_step: step,
         };
         if let Some(p) = open {
             if p.is_dir() {
@@ -674,6 +684,86 @@ impl App {
     }
 }
 
+/// Quiet frames to wait before `--screenshot` fires, so the decoders have
+/// delivered and the textures are uploaded.
+const SCREENSHOT_SETTLE_FRAMES: u32 = 30;
+
+impl App {
+    /// Drives `--screenshot`: waits for the preview to settle, asks the
+    /// viewport for its pixels, writes them and closes the window.
+    fn tick_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, left)) = self.startup_screenshot.clone() else {
+            return;
+        };
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = shot {
+            self.startup_screenshot = None;
+            match write_png(&image, &path) {
+                Ok(()) => tracing::info!("wrote {}", path.display()),
+                Err(e) => tracing::error!("screenshot: {e:#}"),
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        let settled = self.startup.is_none()
+            && self.startup_step.is_none()
+            && self.jobs.running == 0
+            && !self.streams.busy()
+            && !self.streams.awaiting_frame();
+        let left = if settled {
+            left.saturating_sub(1)
+        } else {
+            SCREENSHOT_SETTLE_FRAMES
+        };
+        if left == 0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        self.startup_screenshot = Some((path, left));
+        ctx.request_repaint();
+    }
+}
+
+/// Saves a viewport screenshot as PNG through ffmpeg, like every other
+/// pixel that leaves the app.
+fn write_png(image: &egui::ColorImage, path: &std::path::Path) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let [w, h] = image.size;
+    let mut child = Command::new(trio_media::ffmpeg::ffmpeg_path())
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+        ])
+        .arg("-video_size")
+        .arg(format!("{w}x{h}"))
+        .args(["-i", "-", "-frames:v", "1"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("spawning ffmpeg: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let mut rgb = Vec::with_capacity(w * h * 3);
+        for px in &image.pixels {
+            rgb.extend_from_slice(&px.to_array()[..3]);
+        }
+        stdin.write_all(&rgb)?;
+    }
+    let status = child.wait()?;
+    anyhow::ensure!(status.success(), "ffmpeg exited with {status}");
+    Ok(())
+}
+
 impl eframe::App for App {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &root.ctx().clone();
@@ -695,6 +785,12 @@ impl eframe::App for App {
         if self.startup_export && (self.wav.is_some() || self.project.wav.is_none()) {
             self.startup_export = false;
             self.start_export();
+        }
+        if let Some(step) = self.startup_step {
+            if self.wav.is_some() || self.project.wav.is_none() {
+                self.startup_step = None;
+                self.step = step;
+            }
         }
         self.handle_keys(ctx);
         self.ensure_preview_target();
@@ -734,6 +830,7 @@ impl eframe::App for App {
                 }
             });
         egui::CentralPanel::default().show(root, |ui| preview::show(self, ui));
+        self.tick_screenshot(ctx);
 
         if let Some(err) = self.error.clone() {
             egui::Window::new("Error")

@@ -40,6 +40,19 @@ fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse::<f64>().ok());
     let autoplay = args.iter().any(|a| a == "--play");
     let autoexport = args.iter().any(|a| a == "--export");
+    // `--screenshot FILE [--step N]`: draw the loaded project, save the window
+    // as a PNG and quit. Used for the README pictures.
+    let screenshot = args
+        .iter()
+        .position(|a| a == "--screenshot")
+        .and_then(|i| args.get(i + 1))
+        .map(std::path::PathBuf::from);
+    let step = args
+        .iter()
+        .position(|a| a == "--step")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<usize>().ok())
+        .and_then(|n| panels::Step::ALL.get(n.wrapping_sub(1)).copied());
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -59,6 +72,8 @@ fn main() -> anyhow::Result<()> {
                 start_at,
                 autoplay,
                 autoexport,
+                screenshot,
+                step,
             )))
         }),
     )
