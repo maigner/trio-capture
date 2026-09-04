@@ -2,7 +2,7 @@ use crate::engine::{Clock, Mode, Quality, StreamSet};
 use crate::export_job::ExportJob;
 use crate::gpu::{Compositor, Target};
 use crate::jobs::{JobHub, JobResult, WavData};
-use crate::panels::{self, Tab};
+use crate::panels::{self, Step};
 use crate::preview;
 use crate::timeline::Timeline;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ pub struct App {
 
     pub wav: Option<WavData>,
     pub jobs: JobHub,
-    pub tab: Tab,
+    pub step: Step,
     pub selected_camera: usize,
     pub timeline: Timeline,
     pub status: String,
@@ -101,7 +101,7 @@ impl App {
             preview_max_edge: 1280,
             wav: None,
             jobs: JobHub::new(cc.egui_ctx.clone()),
-            tab: Tab::Import,
+            step: Step::Open,
             selected_camera: 0,
             timeline: Timeline::default(),
             status,
@@ -223,7 +223,7 @@ impl App {
         } else {
             format!("Opened {}: {}", root.display(), notes.join("; "))
         };
-        self.tab = Tab::Layout;
+        self.step = Step::Arrange;
     }
 
     /// Scans one camera folder picked by hand and syncs its clips once the
@@ -259,7 +259,7 @@ impl App {
                     self.request_wav(w);
                 }
                 self.ensure_hwaccel();
-                self.tab = Tab::Layout;
+                self.step = Step::Arrange;
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
@@ -608,7 +608,7 @@ impl App {
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // Typing into a text field owns the keyboard. Any other focused
-        // widget (a button or slider reached with Tab, or focus left behind
+        // widget (a button or slider reached with Step, or focus left behind
         // by a dialog) must not swallow the transport keys, so those take
         // the focus away instead of being dropped silently.
         if ctx.text_edit_focused() {
@@ -654,11 +654,17 @@ impl App {
                 self.seek(dur);
             }
             if i.key_pressed(egui::Key::I) {
-                self.project.range.start = t.min(self.project.range.end.max(t));
+                self.project.range.start = t;
+                if self.project.range.end <= t {
+                    self.project.range.end = dur;
+                }
                 self.dirty = true;
             }
             if i.key_pressed(egui::Key::O) {
                 self.project.range.end = t;
+                if self.project.range.start >= t {
+                    self.project.range.start = 0.0;
+                }
                 self.dirty = true;
             }
             if i.modifiers.command && i.key_pressed(egui::Key::S) {
@@ -674,7 +680,7 @@ impl eframe::App for App {
         for r in self.jobs.poll() {
             self.apply_job(r);
         }
-        if self.tab != Tab::Grade {
+        if self.step != Step::Colour {
             self.show_original = false;
         }
         if let Some((t, play)) = self.startup {

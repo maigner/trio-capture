@@ -27,7 +27,7 @@ const RULER_H: f32 = 18.0;
 const WAVE_H: f32 = 46.0;
 const TRACK_H: f32 = 26.0;
 
-fn fmt_time(t: f64) -> String {
+pub fn fmt_time(t: f64) -> String {
     let t = t.max(0.0);
     let m = (t / 60.0).floor();
     let s = t - m * 60.0;

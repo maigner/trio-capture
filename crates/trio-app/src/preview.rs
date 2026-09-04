@@ -97,7 +97,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             egui::vec2(r.w * rect.width(), r.h * rect.height()),
         );
         let cam = app.project.slots[i].camera.min(2);
-        let selected = cam == app.selected_camera && app.tab == crate::panels::Tab::Grade;
+        let selected = cam == app.selected_camera && app.step == crate::panels::Step::Colour;
         let color = if hovered == Some(i) || drag_slot == Some(i) {
             Color32::from_rgb(120, 180, 255)
         } else if selected {

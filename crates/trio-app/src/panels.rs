@@ -1,15 +1,44 @@
 use crate::app::App;
+use crate::timeline::fmt_time;
 use egui::{Color32, RichText};
 use std::path::PathBuf;
 use trio_core::{Codec, Grade, LayoutId, Orientation};
+use trio_media::ffmpeg::HwAccel;
 
+/// The four steps of the sidebar, shown top to bottom in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Import,
-    Layout,
-    Grade,
+pub enum Step {
+    Open,
+    Arrange,
+    Colour,
     Export,
 }
+
+impl Step {
+    pub const ALL: [Step; 4] = [Step::Open, Step::Arrange, Step::Colour, Step::Export];
+
+    fn title(self) -> &'static str {
+        match self {
+            Step::Open => "Open the shoot",
+            Step::Arrange => "Arrange the picture",
+            Step::Colour => "Match the colours",
+            Step::Export => "Export the video",
+        }
+    }
+
+    fn next(self) -> Option<Step> {
+        let i = Step::ALL.iter().position(|s| *s == self)?;
+        Step::ALL.get(i + 1).copied()
+    }
+}
+
+/// Preview decode sizes offered in the View menu.
+const PREVIEW_SIZES: [(&str, u32); 4] = [
+    ("Fast", 640),
+    ("Normal", 960),
+    ("Fine", 1280),
+    ("Full", 1920),
+];
 
 pub fn menu_bar(app: &mut App, root: &mut egui::Ui) {
     let ctx = root.ctx().clone();
@@ -47,6 +76,21 @@ pub fn menu_bar(app: &mut App, root: &mut egui::Ui) {
                 ui.separator();
                 if ui.button("Quit").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+            ui.menu_button("View", |ui| {
+                ui.label("Preview quality");
+                for (n, e) in PREVIEW_SIZES {
+                    if ui
+                        .radio(app.preview_max_edge == e, n)
+                        .on_hover_text(format!("Decode the cameras at up to {e} pixels"))
+                        .clicked()
+                        && app.preview_max_edge != e
+                    {
+                        app.preview_max_edge = e;
+                        app.rebuild_streams();
+                        ui.close();
+                    }
                 }
             });
             ui.separator();
@@ -92,24 +136,144 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
         .resizable(true)
         .default_size(340.0)
         .show(root, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (tab, label) in [
-                    (Tab::Import, "Import"),
-                    (Tab::Layout, "Layout"),
-                    (Tab::Grade, "Grade"),
-                    (Tab::Export, "Export"),
-                ] {
-                    ui.selectable_value(&mut app.tab, tab, label);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for step in Step::ALL {
+                    step_section(app, ui, step);
                 }
             });
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| match app.tab {
-                Tab::Import => import_tab(app, ui),
-                Tab::Layout => layout_tab(app, ui),
-                Tab::Grade => grade_tab(app, ui),
-                Tab::Export => export_tab(app, ui),
-            });
         });
+}
+
+/// One numbered step: a full-width header with a one-line summary, and the
+/// step's controls under it while it is the current step.
+fn step_section(app: &mut App, ui: &mut egui::Ui, step: Step) {
+    let has_clips = app.project.cameras.iter().any(|c| !c.clips.is_empty());
+    let ready = step == Step::Open || has_clips;
+    let open = app.step == step;
+    let number = Step::ALL.iter().position(|s| *s == step).unwrap_or(0) + 1;
+    ui.add_space(4.0);
+    ui.add_enabled_ui(ready, |ui| {
+        let title = RichText::new(format!("{number}  {}", step.title()))
+            .strong()
+            .size(16.0);
+        let r = ui.add_sized(
+            [ui.available_width(), 30.0],
+            egui::Button::selectable(open, title),
+        );
+        let r = if ready {
+            r
+        } else {
+            r.on_disabled_hover_text("Open a shoot first")
+        };
+        if r.clicked() {
+            app.step = step;
+        }
+        ui.indent(("summary", number), |ui| {
+            ui.weak(step_summary(app, step));
+        });
+    });
+    if open {
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                match step {
+                    Step::Open => open_step(app, ui),
+                    Step::Arrange => arrange_step(app, ui),
+                    Step::Colour => colour_step(app, ui),
+                    Step::Export => export_step(app, ui),
+                }
+                if let Some(next) = step.next() {
+                    ui.add_space(10.0);
+                    ui.add_enabled_ui(has_clips, |ui| {
+                        if ui.button(format!("Next: {} ›", next.title())).clicked() {
+                            app.step = next;
+                        }
+                    });
+                }
+            });
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
+/// What the step currently holds, in one short line.
+fn step_summary(app: &App, step: Step) -> String {
+    match step {
+        Step::Open => {
+            let cams = app
+                .project
+                .cameras
+                .iter()
+                .filter(|c| !c.clips.is_empty())
+                .count();
+            if cams == 0 {
+                return "Nothing opened yet".into();
+            }
+            let clips: usize = app.project.cameras.iter().map(|c| c.clips.len()).sum();
+            let synced = app
+                .project
+                .cameras
+                .iter()
+                .flat_map(|c| &c.clips)
+                .filter(|c| c.sync_confidence.map(|x| x > 0.0).unwrap_or(false))
+                .count();
+            let audio = match &app.wav {
+                Some(w) => format!("audio {}", fmt_time(w.duration)),
+                None if app.project.wav.is_some() => "loading audio…".into(),
+                None => "no audio".into(),
+            };
+            let sync = if app.syncing {
+                "syncing…".to_string()
+            } else if app.wav.is_none() {
+                "not synced".to_string()
+            } else {
+                format!("{synced} of {clips} clips synced")
+            };
+            format!("{cams} cameras · {clips} clips · {audio} · {sync}")
+        }
+        Step::Arrange => {
+            let names: Vec<&str> = app
+                .project
+                .slots
+                .iter()
+                .map(|s| app.project.cameras[s.camera.min(2)].name.as_str())
+                .collect();
+            format!("{} · {}", app.project.layout.label(), names.join(", "))
+        }
+        Step::Colour => {
+            if app.grading {
+                "matching the cameras…".into()
+            } else if app.auto_grades.is_some() {
+                "cameras matched automatically".into()
+            } else {
+                "not matched yet".into()
+            }
+        }
+        Step::Export => {
+            let o = &app.project.output;
+            let size = match o.width {
+                1920 => "Full HD",
+                2560 => "2K",
+                3840 => "4K",
+                _ => "custom size",
+            };
+            let format = if matches!(
+                o.codec,
+                Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
+            ) {
+                "Smaller file"
+            } else {
+                "Standard"
+            };
+            let file = o
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "no output file yet".into());
+            format!("{size} · {format} · {file}")
+        }
+    }
 }
 
 fn path_field(
@@ -149,115 +313,137 @@ fn path_field(
     changed
 }
 
-fn import_tab(app: &mut App, ui: &mut egui::Ui) {
+fn open_step(app: &mut App, ui: &mut egui::Ui) {
     if !app.ffmpeg_ok {
         ui.colored_label(
             Color32::RED,
-            "ffmpeg was not found on PATH. Install it and restart.",
+            "ffmpeg was not found. Install it and start the app again.",
         );
     }
-    ui.heading("Shoot folder");
     ui.label(
-        "One folder with a subfolder per camera and the master audio file next to them. \
-         Cameras are found, the audio is loaded and every clip is synced to it.",
+        "Pick the folder of the shoot. It holds one folder per camera and the audio \
+         recording next to them. The clips are lined up with the audio by themselves.",
     );
+    ui.add_space(6.0);
     if ui
-        .add_enabled(!app.syncing, egui::Button::new("Open folder…"))
+        .add_enabled(
+            !app.syncing,
+            egui::Button::new(RichText::new("Open shoot folder…").strong()),
+        )
         .clicked()
     {
         if let Some(p) = rfd::FileDialog::new().pick_folder() {
             app.open_folder(p);
         }
     }
-    ui.add_space(10.0);
-    ui.heading("Cameras");
-    ui.label(
-        "Or pick each folder by hand. Every video file inside becomes a clip; \
-         clips are synced to the audio as soon as both are loaded.",
-    );
-    for cam in 0..3 {
-        ui.add_space(6.0);
-        ui.group(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("{}", cam + 1));
-                ui.text_edit_singleline(&mut app.project.cameras[cam].name);
-            });
-            let mut folder = app.project.cameras[cam].folder.clone();
-            if path_field(ui, &mut folder, true, None) {
-                if let Some(f) = folder {
-                    app.import_camera(cam, f);
-                }
-            }
-            let c = &app.project.cameras[cam];
-            let total: f64 = c.clips.iter().map(|c| c.duration).sum();
-            let summary = format!("{} clips, {:.0}s", c.clips.len(), total);
-            let format = c.clips.first().map(|first| {
-                format!(
-                    "{}x{} @ {:.2} fps{}",
-                    first.width,
-                    first.height,
-                    first.fps,
-                    if first.hdr { " HDR" } else { "" }
-                )
-            });
-            let folder = c.folder.clone();
-            ui.horizontal(|ui| {
-                ui.label(summary);
-                if let Some(format) = format {
-                    ui.label(format);
-                }
-                if let Some(folder) = folder {
-                    if ui.small_button("Rescan").clicked() {
-                        app.import_camera(cam, folder);
-                    }
-                }
-            });
+    if app.syncing {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Lining up the clips with the audio…");
         });
     }
-    ui.add_space(10.0);
-    ui.heading("Audio");
-    ui.label("Master WAV. Its timeline is the master clock.");
-    let mut wav = app.project.wav.clone();
-    if path_field(
-        ui,
-        &mut wav,
-        false,
-        Some(("audio", &["wav", "flac", "aif", "aiff", "mp3", "m4a"])),
-    ) {
-        if let Some(w) = wav {
-            app.import_wav(w);
+    ui.add_space(8.0);
+    for cam in 0..3 {
+        let c = &app.project.cameras[cam];
+        if c.clips.is_empty() {
+            continue;
         }
+        let total: f64 = c.clips.iter().map(|c| c.duration).sum();
+        let synced = c
+            .clips
+            .iter()
+            .filter(|c| c.sync_confidence.map(|x| x > 0.0).unwrap_or(false))
+            .count();
+        let state = if app.syncing {
+            String::new()
+        } else if app.wav.is_none() {
+            " · waiting for audio".into()
+        } else if synced == c.clips.len() {
+            " · synced".into()
+        } else {
+            format!(
+                " · {} of {} clips not synced",
+                c.clips.len() - synced,
+                c.clips.len()
+            )
+        };
+        ui.label(format!(
+            "{}: {} clips, {}{state}",
+            c.name,
+            c.clips.len(),
+            fmt_time(total)
+        ));
     }
-    if let Some(w) = &app.wav {
-        ui.label(format!("{:.1}s loaded", w.duration));
-    }
-    ui.add_space(10.0);
-    ui.heading("Preview");
-    ui.horizontal(|ui| {
-        ui.label("Decode size");
-        let mut edge = app.preview_max_edge;
-        egui::ComboBox::from_id_salt("preview_edge")
-            .selected_text(format!("{edge}px"))
-            .show_ui(ui, |ui| {
-                for e in [640u32, 960, 1280, 1920] {
-                    ui.selectable_value(&mut edge, e, format!("{e}px"));
-                }
-            });
-        if edge != app.preview_max_edge {
-            app.preview_max_edge = edge;
-            app.rebuild_streams();
+    match &app.wav {
+        Some(w) => {
+            ui.label(format!("Audio: {}", fmt_time(w.duration)));
         }
-    });
+        None if app.project.wav.is_some() => {
+            ui.label("Audio: loading…");
+        }
+        None if app.project.cameras.iter().any(|c| !c.clips.is_empty()) => {
+            ui.colored_label(
+                Color32::YELLOW,
+                "No audio recording found. Pick it below so the clips can be lined up.",
+            );
+        }
+        None => {}
+    }
     if app.clock.player.is_none() {
         ui.colored_label(
             Color32::YELLOW,
-            "No audio output device: playback runs on a silent wall clock.",
+            "No sound output was found: playback runs without sound.",
         );
     }
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new("Pick the folders by hand")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.weak("Use this when the shoot is not in one folder.");
+            for cam in 0..3 {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(format!("Camera {}", cam + 1));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.project.cameras[cam].name)
+                            .desired_width(120.0),
+                    )
+                    .on_hover_text("Name shown in the picture");
+                });
+                let mut folder = app.project.cameras[cam].folder.clone();
+                if path_field(ui, &mut folder, true, None) {
+                    if let Some(f) = folder {
+                        app.import_camera(cam, f);
+                    }
+                }
+                let c = &app.project.cameras[cam];
+                if let Some(first) = c.clips.first() {
+                    ui.weak(format!(
+                        "{}x{} @ {:.2} fps{}",
+                        first.width,
+                        first.height,
+                        first.fps,
+                        if first.hdr { " HDR" } else { "" }
+                    ));
+                }
+            }
+            ui.add_space(4.0);
+            ui.label("Audio recording");
+            let mut wav = app.project.wav.clone();
+            if path_field(
+                ui,
+                &mut wav,
+                false,
+                Some(("audio", &["wav", "flac", "aif", "aiff", "mp3", "m4a"])),
+            ) {
+                if let Some(w) = wav {
+                    app.import_wav(w);
+                }
+            }
+        });
 }
 
-fn layout_tab(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Layout");
+fn arrange_step(app: &mut App, ui: &mut egui::Ui) {
     let mut orientation = app.project.layout.orientation();
     ui.horizontal(|ui| {
         ui.selectable_value(&mut orientation, Orientation::Horizontal, "Horizontal 16:9");
@@ -487,8 +673,7 @@ const fn look(
     }
 }
 
-fn grade_tab(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Colour");
+fn colour_step(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         "The cameras are matched to each other automatically. Pick a camera and move the \
          sliders until it looks right; the preview follows.",
@@ -620,68 +805,147 @@ fn grade_tab(app: &mut App, ui: &mut egui::Ui) {
     app.dirty |= changed;
 }
 
-fn export_tab(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Export");
+/// Plain-language quality steps; the number is the CRF/QP handed to ffmpeg.
+const QUALITY_STEPS: [(&str, u32, &str); 3] = [
+    ("Good", 23, "Smaller file, fine for sharing online"),
+    ("Better", 20, "A good balance of size and quality"),
+    ("Best", 17, "Largest file, hard to tell from the original"),
+];
+
+fn export_step(app: &mut App, ui: &mut egui::Ui) {
+    let hw = app.hwaccel;
     let o = &mut app.project.output;
+    let mut dirty = false;
+
+    // Size
+    ui.label("Size");
     ui.horizontal(|ui| {
-        ui.label("Resolution");
         let presets = [
-            ("1080p", 1920u32, 1080u32),
-            ("1440p", 2560, 1440),
-            ("4K", 3840, 2160),
+            ("Full HD", 1920u32, 1080u32, "1920 × 1080, plays everywhere"),
+            ("2K", 2560, 1440, "2560 × 1440"),
+            (
+                "4K",
+                3840,
+                2160,
+                "3840 × 2160, largest file, slowest export",
+            ),
         ];
-        let cur = presets
-            .iter()
-            .find(|p| p.1 == o.width && p.2 == o.height)
-            .map(|p| p.0)
-            .unwrap_or("custom");
-        egui::ComboBox::from_id_salt("res")
-            .selected_text(cur)
-            .show_ui(ui, |ui| {
-                for (n, w, h) in presets {
-                    if ui
-                        .selectable_label(o.width == w && o.height == h, n)
-                        .clicked()
-                    {
-                        o.width = w;
-                        o.height = h;
-                        app.dirty = true;
-                    }
-                }
-            });
-        ui.label("fps");
-        egui::ComboBox::from_id_salt("fps")
-            .selected_text(format!("{}", o.fps))
-            .show_ui(ui, |ui| {
-                for f in [24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0] {
-                    if ui.selectable_value(&mut o.fps, f, format!("{f}")).changed() {
-                        app.dirty = true;
-                    }
-                }
-            });
-    });
-    ui.horizontal(|ui| {
-        ui.label("Codec");
-        egui::ComboBox::from_id_salt("codec")
-            .selected_text(o.codec.label())
-            .show_ui(ui, |ui| {
-                for c in Codec::ALL {
-                    if ui.selectable_value(&mut o.codec, c, c.label()).changed() {
-                        app.dirty = true;
-                    }
-                }
-            });
-    });
-    let q_label = match o.codec {
-        Codec::H264Software | Codec::H265Software => {
-            "CRF (lower = better, 18 is visually lossless)"
+        for (n, w, h, hint) in presets {
+            let on = o.width == w && o.height == h;
+            if ui.selectable_label(on, n).on_hover_text(hint).clicked() && !on {
+                o.width = w;
+                o.height = h;
+                dirty = true;
+            }
         }
-        Codec::H264Vaapi | Codec::H265Vaapi => "QP (lower = better)",
-        _ => "quality (unused for VideoToolbox, bitrate is automatic)",
-    };
-    app.dirty |= ui
-        .add(egui::Slider::new(&mut o.quality, 10..=35).text(q_label))
-        .changed();
+    });
+
+    // Format: H.264 / H.265 keep the current encoder engine.
+    ui.add_space(4.0);
+    ui.label("Format");
+    ui.horizontal(|ui| {
+        let h265 = matches!(
+            o.codec,
+            Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
+        );
+        if ui
+            .selectable_label(!h265, "Standard")
+            .on_hover_text("H.264: plays on every device and website")
+            .clicked()
+            && h265
+        {
+            o.codec = with_h265(o.codec, false);
+            dirty = true;
+        }
+        if ui
+            .selectable_label(h265, "Smaller file")
+            .on_hover_text("H.265: about half the size at the same quality, needs a newer player")
+            .clicked()
+            && !h265
+        {
+            o.codec = with_h265(o.codec, true);
+            dirty = true;
+        }
+    });
+
+    // Quality
+    ui.add_space(4.0);
+    ui.label("Quality");
+    ui.horizontal(|ui| {
+        for (n, q, hint) in QUALITY_STEPS {
+            let on = o.quality == q;
+            if ui.selectable_label(on, n).on_hover_text(hint).clicked() && !on {
+                o.quality = q;
+                dirty = true;
+            }
+        }
+    });
+    if matches!(o.codec, Codec::H264VideoToolbox | Codec::H265VideoToolbox) {
+        ui.weak("The graphics card encoder picks its own quality; this setting has no effect.");
+    }
+
+    egui::CollapsingHeader::new("More")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Frame rate");
+                egui::ComboBox::from_id_salt("fps")
+                    .selected_text(format!("{} fps", o.fps))
+                    .show_ui(ui, |ui| {
+                        for f in [24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0] {
+                            dirty |= ui
+                                .selectable_value(&mut o.fps, f, format!("{f} fps"))
+                                .changed();
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Encoder");
+                let h265 = matches!(
+                    o.codec,
+                    Codec::H265Software | Codec::H265Vaapi | Codec::H265VideoToolbox
+                );
+                let gpu = matches!(
+                    o.codec,
+                    Codec::H264Vaapi
+                        | Codec::H265Vaapi
+                        | Codec::H264VideoToolbox
+                        | Codec::H265VideoToolbox
+                );
+                if ui
+                    .selectable_label(!gpu, "Processor")
+                    .on_hover_text("Slower, works on every computer")
+                    .clicked()
+                    && gpu
+                {
+                    o.codec = if h265 {
+                        Codec::H265Software
+                    } else {
+                        Codec::H264Software
+                    };
+                    dirty = true;
+                }
+                let gpu_codec = gpu_codec(h265, hw);
+                ui.add_enabled_ui(gpu_codec.is_some(), |ui| {
+                    if ui
+                        .selectable_label(gpu, "Graphics card")
+                        .on_hover_text(if gpu_codec.is_some() {
+                            "Much faster; if the export fails, switch back to Processor"
+                        } else {
+                            "No graphics card encoder was found on this computer"
+                        })
+                        .clicked()
+                        && !gpu
+                    {
+                        if let Some(c) = gpu_codec {
+                            o.codec = c;
+                            dirty = true;
+                        }
+                    }
+                });
+            });
+        });
+
     ui.add_space(6.0);
     ui.label("Output file");
     let mut out = o.path.clone();
@@ -699,7 +963,7 @@ fn export_tab(app: &mut App, ui: &mut egui::Ui) {
             } else {
                 Some(PathBuf::from(text))
             };
-            app.dirty = true;
+            dirty = true;
         }
         if ui.button("Browse").clicked() {
             if let Some(p) = rfd::FileDialog::new()
@@ -708,54 +972,37 @@ fn export_tab(app: &mut App, ui: &mut egui::Ui) {
                 .save_file()
             {
                 out = Some(p);
-                app.dirty = true;
+                dirty = true;
             }
         }
     });
-    app.project.output.path = out;
+    o.path = out;
+    app.dirty |= dirty;
 
+    // Exported part: set only with the I and O keys on the timeline.
     ui.add_space(8.0);
-    ui.heading("Range");
-    let t = app.clock.time();
     let dur = app.duration();
     let r = &mut app.project.range;
     if r.end <= r.start {
+        r.start = r.start.clamp(0.0, dur);
         r.end = dur;
     }
-    ui.horizontal(|ui| {
-        ui.label("in");
-        app.dirty |= ui
-            .add(
-                egui::DragValue::new(&mut r.start)
-                    .speed(0.1)
-                    .suffix(" s")
-                    .fixed_decimals(2),
-            )
-            .changed();
-        if ui.small_button("set").clicked() {
-            r.start = t;
-            app.dirty = true;
-        }
-        ui.label("out");
-        app.dirty |= ui
-            .add(
-                egui::DragValue::new(&mut r.end)
-                    .speed(0.1)
-                    .suffix(" s")
-                    .fixed_decimals(2),
-            )
-            .changed();
-        if ui.small_button("set").clicked() {
-            r.end = t;
-            app.dirty = true;
-        }
-        if ui.small_button("all").clicked() {
-            r.start = 0.0;
-            r.end = dur;
-            app.dirty = true;
-        }
-    });
-    ui.label("Keys: I / O set in and out at the playhead.");
+    let whole = r.start <= 0.0 && r.end >= dur;
+    let span = fmt_time(r.end - r.start);
+    if whole {
+        ui.label(format!("Exports the whole recording ({span})."));
+    } else {
+        ui.label(format!(
+            "Exports from {} to {} ({span}).",
+            fmt_time(r.start),
+            fmt_time(r.end)
+        ));
+    }
+    ui.weak(
+        "To export only a part: play or click on the timeline to where the video should start \
+         and press I, then go to where it should end and press O. \
+         Home, I, End, O brings back the whole recording.",
+    );
     ui.add_space(10.0);
 
     let can = app.export.is_none() && app.project.output.path.is_some() && dur > 0.0;
@@ -764,8 +1011,40 @@ fn export_tab(app: &mut App, ui: &mut egui::Ui) {
             app.start_export();
         }
     });
+    if app.project.output.path.is_none() {
+        ui.weak("Choose an output file first.");
+    }
     if let Some(job) = &app.export {
         ui.add(egui::ProgressBar::new(job.progress()).show_percentage());
         ui.label(job.status());
+    }
+}
+
+/// Same encoder engine, other format.
+fn with_h265(c: Codec, h265: bool) -> Codec {
+    match (c, h265) {
+        (Codec::H264Software | Codec::H265Software, false) => Codec::H264Software,
+        (Codec::H264Software | Codec::H265Software, true) => Codec::H265Software,
+        (Codec::H264Vaapi | Codec::H265Vaapi, false) => Codec::H264Vaapi,
+        (Codec::H264Vaapi | Codec::H265Vaapi, true) => Codec::H265Vaapi,
+        (Codec::H264VideoToolbox | Codec::H265VideoToolbox, false) => Codec::H264VideoToolbox,
+        (Codec::H264VideoToolbox | Codec::H265VideoToolbox, true) => Codec::H265VideoToolbox,
+    }
+}
+
+/// The graphics-card encoder for this platform, if hardware decoding was detected.
+fn gpu_codec(h265: bool, hw: HwAccel) -> Option<Codec> {
+    match hw {
+        HwAccel::None => None,
+        HwAccel::Vaapi | HwAccel::VaapiGpuScale => Some(if h265 {
+            Codec::H265Vaapi
+        } else {
+            Codec::H264Vaapi
+        }),
+        HwAccel::VideoToolbox | HwAccel::VideoToolboxGpuScale => Some(if h265 {
+            Codec::H265VideoToolbox
+        } else {
+            Codec::H264VideoToolbox
+        }),
     }
 }

@@ -411,3 +411,43 @@ only other controls.
   pointer.
 - Added `−`, `+` and `Fit` buttons on the transport row and the `+`/`=`, `−`
   and `0` keys (anchored at the playhead) so zoom is reachable without a wheel.
+
+## Export tab for non-technical users (2026-09-04)
+
+The export tab no longer exposes codec names, CRF/QP numbers or a range
+editor. It shows three rows of plain choices:
+
+- **Size**: Full HD / 2K / 4K (still `width`/`height` in `OutputSettings`).
+- **Format**: *Standard* (H.264) or *Smaller file* (H.265). Switching keeps
+  the current encoder engine (software, VAAPI, VideoToolbox).
+- **Quality**: Good / Better / Best, mapped to CRF or QP 23 / 20 / 17. A
+  project with another value simply highlights none of the three.
+- **More** (collapsed): frame rate and the encoder, *Processor* or
+  *Graphics card*. The graphics card choice is only enabled when hardware
+  decoding was detected, and maps to VAAPI on Linux and VideoToolbox on macOS
+  through `app.hwaccel`.
+
+The Range section is gone. The exported part is set only with the I and O
+keys on the timeline; the tab states what will be exported ("whole
+recording" or "from … to …") and a short note explains the keys. Pressing I
+past the current end resets the end to the recording's end, and O before the
+current start resets the start to zero, so the two keys alone can always
+produce a valid range. The `Codec` enum, the project file and the CLI are
+unchanged.
+
+## One guided sidebar instead of tabs (2026-09-04)
+
+The Import/Layout/Grade/Export tabs are gone. The left panel is a single
+scrolling column of four numbered steps (`panels::Step`: Open, Arrange,
+Colour, Export). Each step is a full-width header with a one-line summary
+under it (cameras/clips/audio/sync state, layout and slot cameras, whether
+the colours were matched, size/format/output file). The current step
+(`app.step`) shows its controls under the header and a *Next: …* button;
+steps 2–4 are disabled until a camera has clips. Opening a folder or project
+still jumps to *Arrange*.
+
+The Open step is reduced to one *Open shoot folder…* button, a status line
+per camera and one for the audio, and a collapsed *Pick the folders by hand*
+section with the previous per-camera folder fields, names and the audio file
+field. The preview decode size moved out of the sidebar into a *View >
+Preview quality* menu (Fast / Normal / Fine / Full).

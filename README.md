@@ -34,34 +34,46 @@ cargo build --release
 
 ## Workflow
 
-1. **Import** tab: open the shoot folder (one subfolder per camera and the
-   master WAV next to them), or pick each folder and the WAV by hand. Every
-   video file in a folder becomes a clip, ordered by its recording time.
-2. Sync runs by itself as soon as the clips and the WAV are loaded. Each
-   clip's own audio is cut into 15 s chunks that are matched against the WAV;
-   the offset most chunks agree on wins, and the percentage shown on the
-   timeline is the share of chunks that agree. Clips may start before the WAV
-   (negative offset) or run past its end. The clips of one camera are then
-   arranged so they never overlap; a clip whose audio matches nothing is
-   placed from its recording timestamp next to a matched sibling and shown at
-   0 %. Drag clips on the timeline to correct an offset (Shift+drag moves all
-   clips of a camera together). The app then switches to the Layout tab.
-3. **Layout** tab: choose horizontal or vertical and a preset. The layout is
-   drawn large; click a slot to move it on to the next camera, or use the
-   camera buttons under it. In the preview, drag inside a slot to move the
-   picture and scroll to zoom; *Reset framing* undoes that.
-4. **Grade** tab: the cameras are matched to each other automatically after
-   sync. Click a slot to pick its camera, then move the plain sliders
-   (brightness, contrast, colour, warmth, tint) until it looks right;
-   *Show original* compares with the recording, *Back to automatic* drops
-   your changes, and double-clicking a slider resets just that one. *More*
-   holds shadows, mid-tones and highlights. The grade follows the camera into
-   every slot it occupies.
-5. **Export** tab: resolution, frame rate, codec, output file, range, go.
-   Export runs inside the app with a progress bar and can be cancelled.
+The left side of the window lists four numbered steps. The current step is
+open; the others show a one-line summary and can be clicked at any time.
+
+1. **Open the shoot**: pick the shoot folder (one subfolder per camera and
+   the master audio file next to them). Every video file in a camera folder
+   becomes a clip, ordered by its recording time, and the clips are lined up
+   with the audio by themselves. Each clip's own audio is cut into 15 s
+   chunks that are matched against the WAV; the offset most chunks agree on
+   wins, and the percentage shown on the timeline is the share of chunks that
+   agree. Clips may start before the WAV (negative offset) or run past its
+   end. The clips of one camera are then arranged so they never overlap; a
+   clip whose audio matches nothing is placed from its recording timestamp
+   next to a matched sibling and shown at 0 %. *Pick the folders by hand*
+   holds the per-camera folder and audio file fields for shoots that are not
+   in one folder. The app then moves on to the next step.
+2. **Arrange the picture**: choose horizontal or vertical and a preset. The
+   layout is drawn large; click a slot to move it on to the next camera, or
+   use the camera buttons under it. In the preview, drag inside a slot to
+   move the picture and scroll to zoom; *Reset framing* undoes that.
+3. **Match the colours**: the cameras are matched to each other
+   automatically after sync. Click a slot to pick its camera, then move the
+   plain sliders (brightness, contrast, colour, warmth, tint) until it looks
+   right; *Show original* compares with the recording, *Back to automatic*
+   drops your changes, and double-clicking a slider resets just that one.
+   *More* holds shadows, mid-tones and highlights. The grade follows the
+   camera into every slot it occupies.
+4. **Export the video**: pick a size (Full HD, 2K, 4K), a format (*Standard*
+   H.264 or *Smaller file* H.265) and a quality (Good, Better, Best), choose
+   the output file, go. *More* holds the frame rate and the choice between
+   the processor and the graphics card encoder. The whole recording is
+   exported unless you mark a part with the I and O keys on the timeline;
+   the step shows what will be exported. Export runs inside the app with a
+   progress bar and can be cancelled.
+
+The *View* menu sets the preview quality (how large the cameras are decoded
+for playback); it does not affect the export.
 
 Keyboard: Space play/pause, Left/Right one frame, Shift+Left/Right one
-second, Home/End, I and O set the export range at the playhead, Ctrl+S saves.
+second, Home/End, I and O mark the start and end of the exported part at the
+playhead, Ctrl+S saves.
 Timeline: Ctrl+scroll, pinch or the +/− keys zoom around the pointer or
 playhead, 0 or *Fit* shows the whole recording, Shift+scroll pans, click the
 ruler to seek. Clips sit where the automatic sync put them and cannot be
