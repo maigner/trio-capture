@@ -52,6 +52,8 @@ pub struct App {
     pub ffmpeg_ok: bool,
     /// Startup request: seek here (and play) once the WAV has loaded.
     startup: Option<(f64, bool)>,
+    /// `--export`: start the export as soon as the project is loaded.
+    startup_export: bool,
 }
 
 impl App {
@@ -60,6 +62,7 @@ impl App {
         open: Option<PathBuf>,
         start_at: Option<f64>,
         autoplay: bool,
+        autoexport: bool,
     ) -> Self {
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu render state");
         let comp = Arc::new(Compositor::new(rs.device.clone(), rs.queue.clone()));
@@ -112,6 +115,7 @@ impl App {
             } else {
                 None
             }),
+            startup_export: autoexport,
         };
         if let Some(p) = open {
             if p.is_dir() {
@@ -342,6 +346,11 @@ impl App {
     }
 
     pub fn toggle_play(&mut self) {
+        tracing::debug!(
+            "toggle play: playing={} t={:.3}",
+            self.clock.is_playing(),
+            self.clock.time()
+        );
         if self.clock.is_playing() {
             self.clock.pause();
         } else {
@@ -349,6 +358,20 @@ impl App {
                 self.clock.seek(0.0);
             }
             self.clock.play();
+        }
+    }
+
+    /// Kick off the export of the in/out range to the configured output file.
+    pub fn start_export(&mut self) {
+        self.clock.pause();
+        let (w, h) = self.project.output_size();
+        let duration = (self.project.range.end - self.project.range.start).max(0.0);
+        match ExportJob::start(&self.comp, &self.project, self.hwaccel, duration) {
+            Ok(job) => {
+                self.status = format!("Exporting {w}x{h}…");
+                self.export = Some(job);
+            }
+            Err(e) => self.error = Some(format!("{e:#}")),
         }
     }
 
@@ -503,6 +526,7 @@ impl App {
             self.rebuild_streams();
         }
         let dur = self.duration();
+        self.clock.tick();
         let mut t = self.clock.time();
         if self.clock.is_playing() && t >= dur && dur > 0.0 {
             self.clock.pause();
@@ -543,8 +567,32 @@ impl App {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // Typing into a text field owns the keyboard. Any other focused
+        // widget (a button or slider reached with Tab, or focus left behind
+        // by a dialog) must not swallow the transport keys, so those take
+        // the focus away instead of being dropped silently.
+        if ctx.text_edit_focused() {
             return;
+        }
+        const TRANSPORT: [egui::Key; 7] = [
+            egui::Key::Space,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowRight,
+            egui::Key::Home,
+            egui::Key::End,
+            egui::Key::I,
+            egui::Key::O,
+        ];
+        let used = ctx.input(|i| {
+            TRANSPORT.iter().any(|k| i.key_pressed(*k))
+                || (i.modifiers.command && i.key_pressed(egui::Key::S))
+        });
+        if !used {
+            return;
+        }
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            tracing::debug!("transport key takes focus from widget {id:?}");
+            ctx.memory_mut(|m| m.surrender_focus(id));
         }
         let frame = 1.0 / self.project.output.fps;
         let t = self.clock.time();
@@ -594,6 +642,10 @@ impl eframe::App for App {
                     self.clock.play();
                 }
             }
+        }
+        if self.startup_export && (self.wav.is_some() || self.project.wav.is_none()) {
+            self.startup_export = false;
+            self.start_export();
         }
         self.handle_keys(ctx);
         self.ensure_preview_target();

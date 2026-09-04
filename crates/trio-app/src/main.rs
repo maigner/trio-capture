@@ -39,6 +39,7 @@ fn main() -> anyhow::Result<()> {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse::<f64>().ok());
     let autoplay = args.iter().any(|a| a == "--play");
+    let autoexport = args.iter().any(|a| a == "--export");
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -57,6 +58,7 @@ fn main() -> anyhow::Result<()> {
                 project_path,
                 start_at,
                 autoplay,
+                autoexport,
             )))
         }),
     )

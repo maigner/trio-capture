@@ -1,5 +1,4 @@
 use crate::app::App;
-use crate::export_job::ExportJob;
 use egui::{Color32, RichText};
 use std::path::PathBuf;
 use trio_core::{Codec, Grade, LayoutId, Orientation, Slot};
@@ -687,16 +686,7 @@ fn export_tab(app: &mut App, ui: &mut egui::Ui) {
     let can = app.export.is_none() && app.project.output.path.is_some() && dur > 0.0;
     ui.add_enabled_ui(can, |ui| {
         if ui.button(RichText::new("Start export").strong()).clicked() {
-            app.clock.pause();
-            let (w, h) = app.project.output_size();
-            let duration = (app.project.range.end - app.project.range.start).max(0.0);
-            match ExportJob::start(&app.comp, &app.project, app.hwaccel, duration) {
-                Ok(job) => {
-                    app.status = format!("Exporting {w}x{h}…");
-                    app.export = Some(job);
-                }
-                Err(e) => app.error = Some(format!("{e:#}")),
-            }
+            app.start_export();
         }
     });
     if let Some(job) = &app.export {

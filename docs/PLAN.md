@@ -351,3 +351,24 @@ the start, so `clip_start_times` prefers a `yyyymmdd_hhmmss` time in the
 name, ignores identical stamps in the end-stamp vote and chains chapters.
 Result: the three set clips match at −17.7/−11.8/−9.3 s, the second set
 lands at 3444–3453 s on all cameras, the chapter follows its first part.
+
+## Transport keys after an export (2026-09-04)
+
+Report: after an export the space bar no longer starts playback. Not
+reproducible here: on a short export and on the "funken und von oben"
+project, Space played the timeline again afterwards. Two things in the code
+could produce exactly that symptom, and both are now guarded:
+
+- The key handler bailed out whenever *any* egui widget had focus, not only a
+  text field. A button or slider focused by Tab (Alt+Tab can leak one) or
+  focus left behind by a dialog silently ate every transport key. Now only a
+  text edit owns the keyboard; a transport key takes the focus away from
+  anything else.
+- The master clock read its time from the cpal audio stream. If that stream
+  dies (device taken over by a DAW, output device removed) the position never
+  advances, Space "does nothing", and no fallback existed. `Clock::tick` now
+  notices a playing stream that has not moved for a second, logs an error and
+  hands the timeline to the wall clock, so transport keeps working silently.
+
+Also new: `trio-capture project.json --export` starts the export right after
+loading, which is how the case was tested without clicking through the UI.

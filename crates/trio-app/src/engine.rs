@@ -239,7 +239,16 @@ pub struct Clock {
     /// (wall time at play start, master time at play start) for the fallback.
     anchor: Option<(Instant, f64)>,
     paused_at: f64,
+    /// Audio position last seen while playing and when it last moved.
+    watch: Option<(f64, Instant)>,
+    /// The audio stream stopped delivering (device lost, taken over by
+    /// another program); the wall clock drives the timeline from then on.
+    stalled: bool,
 }
+
+/// A playing audio stream advances every few milliseconds; this long
+/// without movement means it is dead.
+const STALL_TIMEOUT: Duration = Duration::from_secs(1);
 
 impl Clock {
     pub fn new() -> Self {
@@ -255,11 +264,36 @@ impl Clock {
             playing: false,
             anchor: None,
             paused_at: 0.0,
+            watch: None,
+            stalled: false,
         }
     }
 
     fn use_player(&self) -> bool {
-        self.player.as_ref().map(|p| p.has_audio()).unwrap_or(false)
+        !self.stalled && self.player.as_ref().map(|p| p.has_audio()).unwrap_or(false)
+    }
+
+    /// Call once per frame: notices an audio stream that stopped moving
+    /// while playing and hands the timeline to the wall clock so transport
+    /// keeps working without sound.
+    pub fn tick(&mut self) {
+        if !self.playing || !self.use_player() {
+            self.watch = None;
+            return;
+        }
+        let pos = self.player.as_ref().unwrap().position();
+        match self.watch {
+            Some((last, since)) if last == pos => {
+                if since.elapsed() >= STALL_TIMEOUT {
+                    tracing::error!(
+                        "audio clock stalled at {pos:.3}s; playback continues on the wall clock"
+                    );
+                    self.stalled = true;
+                    self.anchor = Some((Instant::now(), pos));
+                }
+            }
+            _ => self.watch = Some((pos, Instant::now())),
+        }
     }
 
     pub fn time(&self) -> f64 {
