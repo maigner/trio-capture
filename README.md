@@ -46,8 +46,10 @@ cargo build --release
    placed from its recording timestamp next to a matched sibling and shown at
    0 %. Drag clips on the timeline to correct an offset (Shift+drag moves all
    clips of a camera together). The app then switches to the Layout tab.
-3. **Layout** tab: choose horizontal or vertical and a preset, assign cameras
-   to slots. In the preview, drag inside a slot to pan and scroll to zoom.
+3. **Layout** tab: choose horizontal or vertical and a preset. The layout is
+   drawn large; click a slot to move it on to the next camera, or use the
+   camera buttons under it. In the preview, drag inside a slot to move the
+   picture and scroll to zoom; *Reset framing* undoes that.
 4. **Grade** tab: the cameras are matched to each other automatically after
    sync. Click a slot to pick its camera, then move the plain sliders
    (brightness, contrast, colour, warmth, tint) until it looks right;

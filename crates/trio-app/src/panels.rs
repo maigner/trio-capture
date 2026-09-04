@@ -1,7 +1,7 @@
 use crate::app::App;
 use egui::{Color32, RichText};
 use std::path::PathBuf;
-use trio_core::{Codec, Grade, LayoutId, Orientation, Slot};
+use trio_core::{Codec, Grade, LayoutId, Orientation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -288,46 +288,33 @@ fn layout_tab(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     ui.add_space(10.0);
-    ui.heading("Slots");
-    ui.label("Drag inside a slot in the preview to pan, scroll to zoom.");
+    ui.heading("Cameras in the picture");
+    ui.label("Click a slot in the picture to switch to the next camera, or use the buttons.");
+    ui.add_space(4.0);
+    layout_picture(app, ui);
+    ui.add_space(6.0);
+    let names: Vec<String> = app.project.cameras.iter().map(|c| c.name.clone()).collect();
     for s in 0..3 {
-        ui.add_space(4.0);
-        ui.group(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("Slot {}", s + 1));
-                let slot: &mut Slot = &mut app.project.slots[s];
-                let names: Vec<String> =
-                    app.project.cameras.iter().map(|c| c.name.clone()).collect();
-                egui::ComboBox::from_id_salt(("slot_cam", s))
-                    .selected_text(&names[slot.camera.min(2)])
-                    .show_ui(ui, |ui| {
-                        for (i, n) in names.iter().enumerate() {
-                            if ui.selectable_value(&mut slot.camera, i, n).changed() {
-                                app.dirty = true;
-                            }
-                        }
-                    });
-                if ui.small_button("Reset").clicked() {
-                    slot.zoom = 1.0;
-                    slot.pan = [0.0, 0.0];
+        ui.horizontal(|ui| {
+            ui.label(format!("Slot {}", s + 1));
+            for (i, n) in names.iter().enumerate() {
+                if ui
+                    .selectable_value(&mut app.project.slots[s].camera, i, n)
+                    .changed()
+                {
                     app.dirty = true;
                 }
-            });
-            let slot = &mut app.project.slots[s];
-            app.dirty |= ui
-                .add(egui::Slider::new(&mut slot.zoom, 1.0..=4.0).text("zoom"))
-                .changed();
-            app.dirty |= ui
-                .add(egui::Slider::new(&mut slot.pan[0], -0.5..=0.5).text("pan x"))
-                .changed();
-            app.dirty |= ui
-                .add(egui::Slider::new(&mut slot.pan[1], -0.5..=0.5).text("pan y"))
-                .changed();
+            }
         });
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
+    ui.label("Drag inside a slot in the preview to move the picture, scroll to zoom.");
     ui.horizontal(|ui| {
-        if ui.button("Rotate cameras").clicked() {
+        if ui
+            .button("Rotate cameras")
+            .on_hover_text("Every camera moves to the next slot")
+            .clicked()
+        {
             let c = [
                 app.project.slots[0].camera,
                 app.project.slots[1].camera,
@@ -338,7 +325,83 @@ fn layout_tab(app: &mut App, ui: &mut egui::Ui) {
             app.project.slots[2].camera = c[1];
             app.dirty = true;
         }
+        if ui
+            .button("Reset framing")
+            .on_hover_text("Undo all moving and zooming inside the slots")
+            .clicked()
+        {
+            for slot in app.project.slots.iter_mut() {
+                slot.zoom = 1.0;
+                slot.pan = [0.0, 0.0];
+            }
+            app.dirty = true;
+        }
     });
+}
+
+/// The current layout drawn large, one clickable box per slot with the
+/// camera's name in it. A click moves the slot on to the next camera.
+fn layout_picture(app: &mut App, ui: &mut egui::Ui) {
+    let layout = app.project.layout;
+    let w = ui.available_width().min(360.0);
+    let h = w * 9.0 / 16.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    // A vertical layout stands upright inside the same box.
+    let pic = match layout.orientation() {
+        Orientation::Horizontal => rect,
+        Orientation::Vertical => {
+            let pw = h * 9.0 / 16.0;
+            egui::Rect::from_center_size(rect.center(), egui::vec2(pw, h))
+        }
+    };
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(pic, 2.0, Color32::from_gray(30));
+    for (s, r) in trio_core::layout::slot_rects(layout).iter().enumerate() {
+        let rr = egui::Rect::from_min_size(
+            pic.min + egui::vec2(r.x * pic.width(), r.y * pic.height()),
+            egui::vec2(r.w * pic.width(), r.h * pic.height()),
+        )
+        .shrink(2.0);
+        let resp = ui.interact(rr, ui.id().with(("slot_pick", s)), egui::Sense::click());
+        if resp.clicked() {
+            let slot = &mut app.project.slots[s];
+            slot.camera = (slot.camera + 1) % 3;
+            app.dirty = true;
+        }
+        let cam = app.project.slots[s].camera.min(2);
+        let fill = if resp.hovered() {
+            Color32::from_gray(70)
+        } else {
+            Color32::from_gray(50)
+        };
+        painter.rect(
+            rr,
+            3.0,
+            fill,
+            egui::Stroke::new(1.0, Color32::from_gray(140)),
+            egui::StrokeKind::Inside,
+        );
+        let name = &app.project.cameras[cam].name;
+        let font = if rr.width() < 90.0 || rr.height() < 40.0 {
+            egui::FontId::proportional(12.0)
+        } else {
+            egui::FontId::proportional(16.0)
+        };
+        painter.text(
+            rr.center(),
+            egui::Align2::CENTER_CENTER,
+            name,
+            font,
+            Color32::WHITE,
+        );
+        painter.text(
+            rr.left_top() + egui::vec2(5.0, 3.0),
+            egui::Align2::LEFT_TOP,
+            format!("{}", s + 1),
+            egui::FontId::proportional(11.0),
+            Color32::from_gray(170),
+        );
+    }
 }
 
 fn layout_icon(ui: &mut egui::Ui, layout: LayoutId, selected: bool) {

@@ -391,3 +391,11 @@ labels at the ends instead of numbers, *Back to automatic* per camera,
 slider to reset it alone. Lift/gamma/gain, "use this look for all cameras" and
 "reset all" live under *More*. The app keeps the last auto-grade result
 (`App::auto_grades`) so undo returns to it rather than to neutral.
+
+## Layout tab without sliders (2026-09-04)
+
+Zoom and pan are only set by dragging and scrolling in the preview. The Layout
+tab shows the chosen layout as a large picture with the camera name in every
+slot; a click cycles the slot to the next camera, and a row of camera buttons
+per slot does the same explicitly. *Rotate cameras* and *Reset framing* are the
+only other controls.
