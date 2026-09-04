@@ -456,3 +456,10 @@ per camera and one for the audio, and a collapsed *Pick the folders by hand*
 section with the previous per-camera folder fields, names and the audio file
 field. The preview decode size moved out of the sidebar into a *View >
 Preview quality* menu (Fast / Normal / Fine / Full).
+
+Step headings are plain text (number in the accent colour and a bar on the
+left for the current step) so they do not read as buttons; the other steps
+still open on a click. The one action each step is about is a large filled
+`primary_button`: *Open shoot folder…*, *Match cameras automatically*,
+*Choose/Change output file…*, *Start export* and *Next: …*. The output path
+text field is gone; the chosen path is shown under the button.

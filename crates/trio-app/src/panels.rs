@@ -31,6 +31,29 @@ impl Step {
     }
 }
 
+/// Colour of the current step's marker and of the primary buttons.
+const ACCENT: Color32 = Color32::from_rgb(36, 118, 196);
+
+/// A large, filled button for the one action a step is about.
+fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let fill = if enabled {
+        ACCENT
+    } else {
+        Color32::from_gray(55)
+    };
+    let colour = if enabled {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(120)
+    };
+    let label = RichText::new(text).size(17.0).strong().color(colour);
+    let button = egui::Button::new(label)
+        .fill(fill)
+        .corner_radius(6.0)
+        .min_size(egui::vec2(ui.available_width(), 42.0));
+    ui.add_enabled(enabled, button)
+}
+
 /// Preview decode sizes offered in the View menu.
 const PREVIEW_SIZES: [(&str, u32); 4] = [
     ("Fast", 640),
@@ -150,26 +173,54 @@ fn step_section(app: &mut App, ui: &mut egui::Ui, step: Step) {
     let ready = step == Step::Open || has_clips;
     let open = app.step == step;
     let number = Step::ALL.iter().position(|s| *s == step).unwrap_or(0) + 1;
-    ui.add_space(4.0);
-    ui.add_enabled_ui(ready, |ui| {
-        let title = RichText::new(format!("{number}  {}", step.title()))
-            .strong()
-            .size(16.0);
-        let r = ui.add_sized(
-            [ui.available_width(), 30.0],
-            egui::Button::selectable(open, title),
+    ui.add_space(6.0);
+    let colour = if !ready {
+        Color32::from_gray(90)
+    } else if open {
+        ui.visuals().strong_text_color()
+    } else {
+        Color32::from_gray(150)
+    };
+    let heading = ui
+        .horizontal(|ui| {
+            ui.add_space(6.0);
+            let num = RichText::new(format!("{number}"))
+                .size(20.0)
+                .color(if open { ACCENT } else { colour });
+            ui.label(num);
+            ui.add_space(4.0);
+            ui.label(RichText::new(step.title()).size(20.0).color(colour));
+        })
+        .response;
+    if open {
+        // Accent bar down the left of the current step's heading.
+        let bar = egui::Rect::from_min_size(
+            heading.rect.left_top(),
+            egui::vec2(3.0, heading.rect.height()),
         );
-        let r = if ready {
-            r
-        } else {
-            r.on_disabled_hover_text("Open a shoot first")
-        };
+        ui.painter().rect_filled(bar, 1.0, ACCENT);
+    }
+    if ready && !open {
+        // Any other step opens on a click, without looking like a button.
+        let r = ui.interact(
+            heading.rect,
+            ui.id().with(("step", number)),
+            egui::Sense::click(),
+        );
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if r.clicked() {
             app.step = step;
         }
-        ui.indent(("summary", number), |ui| {
-            ui.weak(step_summary(app, step));
+    }
+    ui.indent(("summary", number), |ui| {
+        let summary = RichText::new(step_summary(app, step)).color(if ready {
+            Color32::from_gray(140)
+        } else {
+            Color32::from_gray(90)
         });
+        ui.label(summary);
     });
     if open {
         ui.add_space(4.0);
@@ -184,11 +235,10 @@ fn step_section(app: &mut App, ui: &mut egui::Ui, step: Step) {
                 }
                 if let Some(next) = step.next() {
                     ui.add_space(10.0);
-                    ui.add_enabled_ui(has_clips, |ui| {
-                        if ui.button(format!("Next: {} ›", next.title())).clicked() {
-                            app.step = next;
-                        }
-                    });
+                    if primary_button(ui, &format!("Next: {} ›", next.title()), has_clips).clicked()
+                    {
+                        app.step = next;
+                    }
                 }
             });
     }
@@ -326,13 +376,7 @@ fn open_step(app: &mut App, ui: &mut egui::Ui) {
          recording next to them. The clips are lined up with the audio by themselves.",
     );
     ui.add_space(6.0);
-    if ui
-        .add_enabled(
-            !app.syncing,
-            egui::Button::new(RichText::new("Open shoot folder…").strong()),
-        )
-        .clicked()
-    {
+    if primary_button(ui, "Open shoot folder…", !app.syncing).clicked() {
         if let Some(p) = rfd::FileDialog::new().pick_folder() {
             app.open_folder(p);
         }
@@ -680,20 +724,17 @@ fn colour_step(app: &mut App, ui: &mut egui::Ui) {
          sliders until it looks right; the preview follows.",
     );
     ui.add_space(6.0);
+    if primary_button(ui, "Match cameras automatically", !app.grading)
+        .on_hover_text(
+            "Looks at a few frames of every camera and sets brightness, contrast, \
+             colour and warmth so the cameras fit together. Your own changes are \
+             replaced.",
+        )
+        .clicked()
+    {
+        app.start_auto_grade();
+    }
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(!app.grading, |ui| {
-            if ui
-                .button("Match cameras automatically")
-                .on_hover_text(
-                    "Looks at a few frames of every camera and sets brightness, contrast, \
-                     colour and warmth so the cameras fit together. Your own changes are \
-                     replaced.",
-                )
-                .clicked()
-            {
-                app.start_auto_grade();
-            }
-        });
         if app.grading {
             ui.spinner();
             ui.label(format!(
@@ -959,36 +1000,41 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
             ));
         });
 
-    ui.add_space(6.0);
-    ui.label("Output file");
+    ui.add_space(8.0);
     let mut out = o.path.clone();
-    ui.horizontal(|ui| {
-        let mut text = out
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        if ui
-            .add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 70.0))
-            .changed()
-        {
-            out = if text.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(text))
-            };
+    let choose = match &out {
+        Some(_) => "Change output file…",
+        None => "Choose output file…",
+    };
+    if primary_button(ui, choose, true).clicked() {
+        let mut dialog = rfd::FileDialog::new().add_filter("mp4", &["mp4"]);
+        dialog = match &out {
+            Some(p) => {
+                let name = p
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "band.mp4".into());
+                let d = dialog.set_file_name(name);
+                match p.parent() {
+                    Some(dir) if dir.is_dir() => d.set_directory(dir),
+                    _ => d,
+                }
+            }
+            None => dialog.set_file_name("band.mp4"),
+        };
+        if let Some(p) = dialog.save_file() {
+            out = Some(p);
             dirty = true;
         }
-        if ui.button("Browse").clicked() {
-            if let Some(p) = rfd::FileDialog::new()
-                .add_filter("mp4", &["mp4"])
-                .set_file_name("band.mp4")
-                .save_file()
-            {
-                out = Some(p);
-                dirty = true;
-            }
+    }
+    match &out {
+        Some(p) => {
+            ui.label(format!("Saves to {}", p.display()));
         }
-    });
+        None => {
+            ui.weak("No output file chosen yet.");
+        }
+    }
     o.path = out;
     app.dirty |= dirty;
 
@@ -1019,11 +1065,9 @@ fn export_step(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(10.0);
 
     let can = app.export.is_none() && app.project.output.path.is_some() && dur > 0.0;
-    ui.add_enabled_ui(can, |ui| {
-        if ui.button(RichText::new("Start export").strong()).clicked() {
-            app.start_export();
-        }
-    });
+    if primary_button(ui, "Start export", can).clicked() {
+        app.start_export();
+    }
     if app.project.output.path.is_none() {
         ui.weak("Choose an output file first.");
     }

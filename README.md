@@ -35,7 +35,8 @@ cargo build --release
 ## Workflow
 
 The left side of the window lists four numbered steps. The current step is
-open; the others show a one-line summary and can be clicked at any time.
+open and has a blue mark; the others show a one-line summary and open on a
+click. The big blue button in each step is the thing to do there.
 
 1. **Open the shoot**: pick the shoot folder (one subfolder per camera and
    the master audio file next to them). Every video file in a camera folder
