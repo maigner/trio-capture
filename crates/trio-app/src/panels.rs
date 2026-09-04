@@ -6,7 +6,6 @@ use trio_core::{Codec, Grade, LayoutId, Orientation, Slot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Import,
-    Sync,
     Layout,
     Grade,
     Export,
@@ -96,7 +95,6 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
             ui.horizontal_wrapped(|ui| {
                 for (tab, label) in [
                     (Tab::Import, "Import"),
-                    (Tab::Sync, "Sync"),
                     (Tab::Layout, "Layout"),
                     (Tab::Grade, "Grade"),
                     (Tab::Export, "Export"),
@@ -107,7 +105,6 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| match app.tab {
                 Tab::Import => import_tab(app, ui),
-                Tab::Sync => sync_tab(app, ui),
                 Tab::Layout => layout_tab(app, ui),
                 Tab::Grade => grade_tab(app, ui),
                 Tab::Export => export_tab(app, ui),
@@ -162,7 +159,7 @@ fn import_tab(app: &mut App, ui: &mut egui::Ui) {
     ui.heading("Shoot folder");
     ui.label(
         "One folder with a subfolder per camera and the master audio file next to them. \
-         Cameras are found, the audio is loaded and sync runs by itself.",
+         Cameras are found, the audio is loaded and every clip is synced to it.",
     );
     if ui
         .add_enabled(!app.syncing, egui::Button::new("Open folder…"))
@@ -174,7 +171,10 @@ fn import_tab(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.add_space(10.0);
     ui.heading("Cameras");
-    ui.label("Or pick each folder by hand. Every video file inside becomes a clip.");
+    ui.label(
+        "Or pick each folder by hand. Every video file inside becomes a clip; \
+         clips are synced to the audio as soon as both are loaded.",
+    );
     for cam in 0..3 {
         ui.add_space(6.0);
         ui.group(|ui| {
@@ -185,25 +185,31 @@ fn import_tab(app: &mut App, ui: &mut egui::Ui) {
             let mut folder = app.project.cameras[cam].folder.clone();
             if path_field(ui, &mut folder, true, None) {
                 if let Some(f) = folder {
-                    app.jobs.scan(cam, f);
-                    app.status = "Scanning…".into();
+                    app.import_camera(cam, f);
                 }
             }
             let c = &app.project.cameras[cam];
             let total: f64 = c.clips.iter().map(|c| c.duration).sum();
+            let summary = format!("{} clips, {:.0}s", c.clips.len(), total);
+            let format = c.clips.first().map(|first| {
+                format!(
+                    "{}x{} @ {:.2} fps{}",
+                    first.width,
+                    first.height,
+                    first.fps,
+                    if first.hdr { " HDR" } else { "" }
+                )
+            });
+            let folder = c.folder.clone();
             ui.horizontal(|ui| {
-                ui.label(format!("{} clips, {:.0}s", c.clips.len(), total));
-                if let Some(first) = c.clips.first() {
-                    ui.label(format!(
-                        "{}x{} @ {:.2} fps{}",
-                        first.width,
-                        first.height,
-                        first.fps,
-                        if first.hdr { " HDR" } else { "" }
-                    ));
+                ui.label(summary);
+                if let Some(format) = format {
+                    ui.label(format);
                 }
-                if c.folder.is_some() && ui.small_button("Rescan").clicked() {
-                    app.jobs.scan(cam, c.folder.clone().unwrap());
+                if let Some(folder) = folder {
+                    if ui.small_button("Rescan").clicked() {
+                        app.import_camera(cam, folder);
+                    }
                 }
             });
         });
@@ -219,7 +225,7 @@ fn import_tab(app: &mut App, ui: &mut egui::Ui) {
         Some(("audio", &["wav", "flac", "aif", "aiff", "mp3", "m4a"])),
     ) {
         if let Some(w) = wav {
-            app.request_wav(w);
+            app.import_wav(w);
         }
     }
     if let Some(w) = &app.wav {
@@ -247,107 +253,6 @@ fn import_tab(app: &mut App, ui: &mut egui::Ui) {
             Color32::YELLOW,
             "No audio output device: playback runs on a silent wall clock.",
         );
-    }
-}
-
-fn confidence_color(c: f32) -> Color32 {
-    if c >= 0.5 {
-        Color32::from_rgb(80, 200, 120)
-    } else if c >= 0.3 {
-        Color32::from_rgb(230, 190, 60)
-    } else {
-        Color32::from_rgb(230, 80, 80)
-    }
-}
-
-fn sync_tab(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Sync");
-    ui.label("Each clip is placed on the master timeline by matching its own audio to the WAV.");
-    ui.add_space(4.0);
-    ui.add_enabled_ui(app.wav.is_some() && !app.syncing, |ui| {
-        if ui.button("Auto-sync all clips").clicked() {
-            app.start_sync_all();
-        }
-    });
-    if app.wav.is_none() {
-        ui.colored_label(Color32::YELLOW, "Load a WAV on the Import tab first.");
-    }
-    if app.syncing {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(format!(
-                "Analysing audio… {}/{}",
-                app.sync_progress.0, app.sync_progress.1
-            ));
-        });
-    }
-    let frame = 1.0 / app.project.output.fps;
-    let mut changed = false;
-    for cam in 0..3 {
-        ui.add_space(8.0);
-        let name = app.project.cameras[cam].name.clone();
-        egui::CollapsingHeader::new(format!(
-            "{name} ({} clips)",
-            app.project.cameras[cam].clips.len()
-        ))
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Shift all");
-                if ui.small_button("-1 f").clicked() {
-                    app.project.cameras[cam]
-                        .clips
-                        .iter_mut()
-                        .for_each(|c| c.offset -= frame);
-                    changed = true;
-                }
-                if ui.small_button("+1 f").clicked() {
-                    app.project.cameras[cam]
-                        .clips
-                        .iter_mut()
-                        .for_each(|c| c.offset += frame);
-                    changed = true;
-                }
-            });
-            for clip in app.project.cameras[cam].clips.iter_mut() {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(clip.file_name()).monospace().small());
-                });
-                ui.horizontal(|ui| {
-                    ui.label("offset");
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut clip.offset)
-                                .speed(0.01)
-                                .suffix(" s")
-                                .fixed_decimals(3),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                    if ui.small_button("-1 f").clicked() {
-                        clip.offset -= frame;
-                        changed = true;
-                    }
-                    if ui.small_button("+1 f").clicked() {
-                        clip.offset += frame;
-                        changed = true;
-                    }
-                    match clip.sync_confidence {
-                        Some(c) => {
-                            ui.colored_label(confidence_color(c), format!("{:.0}%", c * 100.0));
-                        }
-                        None => {
-                            ui.weak("not synced");
-                        }
-                    }
-                });
-            }
-        });
-    }
-    if changed {
-        app.project_changed();
     }
 }
 

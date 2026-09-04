@@ -34,17 +34,18 @@ cargo build --release
 
 ## Workflow
 
-1. **Import** tab: pick one folder per camera and the master WAV. Every video
-   file in a folder becomes a clip, ordered by its recording time.
-2. **Sync** tab: press *Auto-sync all clips*. Each clip's own audio is cut
-   into 15 s chunks that are matched against the WAV; the offset most chunks
-   agree on wins, and the percentage is the share of chunks that agree. Clips
-   may start before the WAV (negative offset) or run past its end. The clips
-   of one camera are then arranged so they never overlap; a clip whose audio
-   matches nothing is placed from its recording timestamp next to a matched
-   sibling and shown at 0 %. Nudge by frame with the buttons, type an offset,
-   or drag clips on the timeline (Shift+drag moves all clips of a camera
-   together).
+1. **Import** tab: open the shoot folder (one subfolder per camera and the
+   master WAV next to them), or pick each folder and the WAV by hand. Every
+   video file in a folder becomes a clip, ordered by its recording time.
+2. Sync runs by itself as soon as the clips and the WAV are loaded. Each
+   clip's own audio is cut into 15 s chunks that are matched against the WAV;
+   the offset most chunks agree on wins, and the percentage shown on the
+   timeline is the share of chunks that agree. Clips may start before the WAV
+   (negative offset) or run past its end. The clips of one camera are then
+   arranged so they never overlap; a clip whose audio matches nothing is
+   placed from its recording timestamp next to a matched sibling and shown at
+   0 %. Drag clips on the timeline to correct an offset (Shift+drag moves all
+   clips of a camera together). The app then switches to the Layout tab.
 3. **Layout** tab: choose horizontal or vertical and a preset, assign cameras
    to slots. In the preview, drag inside a slot to pan and scroll to zoom.
 4. **Grade** tab: click a slot to pick its camera, then adjust exposure,

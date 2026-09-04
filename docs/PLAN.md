@@ -59,7 +59,7 @@ see is exactly what you get.
 ```
 +-----------------------------------------------------------------------+
 | UI (egui)                                                             |
-|  Import | Sync | Layout | Grade | Export   ...  Timeline + Preview    |
+|  Import | Layout | Grade | Export   ...   Timeline + Preview          |
 +---------------------------+-------------------------------------------+
                             | Project (single source of truth, serde)
                             v
@@ -372,3 +372,12 @@ could produce exactly that symptom, and both are now guarded:
 
 Also new: `trio-capture project.json --export` starts the export right after
 loading, which is how the case was tested without clicking through the UI.
+
+## Sync tab removed (2026-09-04)
+
+Sync is automatic only: it runs when the shoot folder is opened, and also when
+a camera folder or the WAV is picked by hand on the Import tab, as soon as both
+sides are loaded. The Sync tab with its button and per-clip offset fields is
+gone; offsets are corrected by dragging clips on the timeline, and the match
+confidence stays visible there. Opening a folder or a project switches to the
+Layout tab.

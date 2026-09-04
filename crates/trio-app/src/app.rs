@@ -205,8 +205,7 @@ impl App {
                 if !shoot.other_audio.is_empty() {
                     notes.push(format!("using {} as master audio", existing_name(&w)));
                 }
-                self.request_wav(w);
-                self.auto_sync = true;
+                self.import_wav(w);
             }
             None => notes.push("no audio file in the folder, sync skipped".into()),
         }
@@ -215,7 +214,21 @@ impl App {
         } else {
             format!("Opened {}: {}", root.display(), notes.join("; "))
         };
-        self.tab = Tab::Sync;
+        self.tab = Tab::Layout;
+    }
+
+    /// Scans one camera folder picked by hand and syncs its clips once the
+    /// WAV is there.
+    pub fn import_camera(&mut self, cam: usize, folder: PathBuf) {
+        self.jobs.scan(cam, folder);
+        self.status = "Scanning…".into();
+        self.auto_sync = true;
+    }
+
+    /// Loads a master WAV picked by hand and syncs the clips to it.
+    pub fn import_wav(&mut self, path: PathBuf) {
+        self.request_wav(path);
+        self.auto_sync = true;
     }
 
     /// Runs the deferred auto-sync once every scan and the WAV are in.
@@ -237,6 +250,7 @@ impl App {
                     self.request_wav(w);
                 }
                 self.ensure_hwaccel();
+                self.tab = Tab::Layout;
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
