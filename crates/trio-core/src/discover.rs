@@ -138,22 +138,54 @@ pub fn scan_folder(folder: &Path) -> Result<Vec<Clip>> {
     Ok(clips)
 }
 
-/// Initial offsets: relative creation times when available, else sequential.
+/// Initial offsets: relative recording start times when available, else
+/// sequential.
 pub fn layout_by_creation_time(clips: &mut [Clip]) {
-    let first = clips
-        .first()
-        .and_then(|c| parse_iso_seconds(c.creation_time.as_deref()?));
+    let starts = crate::sync::clip_start_times(clips);
+    let first = starts.first().copied().flatten();
     let mut cursor = 0.0;
-    for c in clips.iter_mut() {
-        let rel = first.and_then(|f| parse_iso_seconds(c.creation_time.as_deref()?).map(|t| t - f));
-        // Phones stamp creation_time at the end of recording on some models,
-        // so an estimate can go negative; fall back to sequential in that case.
+    for (c, start) in clips.iter_mut().zip(starts) {
+        let rel = first.and_then(|f| start.map(|t| t - f));
+        // An inconsistent stamp can still go backwards; fall back to
+        // sequential in that case.
         c.offset = match rel {
             Some(r) if r >= cursor - 1.0 => r.max(0.0),
             _ => cursor,
         };
         cursor = c.offset + c.duration;
     }
+}
+
+/// Recording start encoded in a file name such as `VID_20260820_191928.mp4`
+/// (Android, Samsung, Pixel), as seconds on the same scale as
+/// [`parse_iso_seconds`] but in whatever zone the phone used. Differences
+/// between files of one camera are what sync needs, so the zone does not
+/// matter.
+pub fn time_in_name(name: &str) -> Option<f64> {
+    let b = name.as_bytes();
+    let digit = |i: usize| b.get(i).map(|c| c.is_ascii_digit()).unwrap_or(false);
+    let num = |i: usize, n: usize| -> i64 { name[i..i + n].parse().unwrap_or(0) };
+    for i in 0..b.len() {
+        if (0..8).all(|k| digit(i + k))
+            && b.get(i + 8) == Some(&b'_')
+            && (9..15).all(|k| digit(i + k))
+            && !digit(i.wrapping_sub(1))
+        {
+            let (y, m, d) = (num(i, 4), num(i + 4, 2), num(i + 6, 2));
+            let (hh, mm, ss) = (num(i + 9, 2), num(i + 11, 2), num(i + 13, 2));
+            let plausible = (2000..2100).contains(&y)
+                && (1..=12).contains(&m)
+                && (1..=31).contains(&d)
+                && hh < 24
+                && mm < 60
+                && ss < 60;
+            if plausible {
+                let days = days_from_civil(y, m, d);
+                return Some(days as f64 * 86400.0 + (hh * 3600 + mm * 60 + ss) as f64);
+            }
+        }
+    }
+    None
 }
 
 /// Parses "YYYY-MM-DDTHH:MM:SS(.ffffff)Z" into seconds since an arbitrary epoch.
@@ -213,6 +245,16 @@ mod tests {
         assert_eq!(s.wav, Some(dir.join("master take.wav")));
         assert_eq!(s.other_audio, vec![dir.join("rough mix.mp3")]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn times_in_file_names() {
+        let a = time_in_name("VID_20260820_191928.mp4").unwrap();
+        let b = time_in_name("PXL_20260820_201710123.mp4").unwrap();
+        assert!((b - a - 3462.0).abs() < 1e-6);
+        assert_eq!(time_in_name("GX010051.MP4"), None);
+        assert_eq!(time_in_name("IMG_2054.MOV"), None);
+        assert_eq!(time_in_name("20261399_250000.mp4"), None);
     }
 
     #[test]

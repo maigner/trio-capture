@@ -107,6 +107,11 @@ pub struct Clip {
     pub hdr: bool,
     pub has_audio: bool,
     pub creation_time: Option<String>,
+    /// The container stamps the end of the recording rather than the start.
+    /// Android's MediaRecorder writes `creation_time` when it finalises the
+    /// file, so its clips carry the stop time.
+    #[serde(default)]
+    pub end_stamped: bool,
     /// Master-timeline seconds at which this clip's first frame appears.
     pub offset: f64,
     /// 0..1, present when auto-sync ran.

@@ -580,6 +580,7 @@ mod tests {
             hdr: false,
             has_audio: true,
             creation_time: None,
+            end_stamped: false,
             offset,
             sync_confidence: None,
         };

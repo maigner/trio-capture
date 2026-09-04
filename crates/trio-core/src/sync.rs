@@ -13,6 +13,8 @@
 //! recorded one after another, so they can never overlap, and the best
 //! non-overlapping combination of candidates is chosen.
 
+use crate::discover::{parse_iso_seconds, time_in_name};
+use crate::model::Clip;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
 
@@ -30,6 +32,10 @@ const CLUSTER_TOL: i64 = 50;
 /// A chunk whose best correlation is weaker than this did not match anything.
 const MIN_CHUNK_SCORE: f32 = 0.2;
 const MAX_CANDIDATES: usize = 4;
+/// Agreeing chunks needed for full credit. A lone chunk finds a plausible
+/// peak somewhere in any long master by chance, so its vote alone proves
+/// nothing; two or three chunks agreeing to within a second cannot be luck.
+const CORROBORATION: usize = 3;
 /// Candidates below this confidence are not used to place a clip.
 pub const MIN_CONFIDENCE: f32 = 0.25;
 
@@ -255,11 +261,14 @@ impl Master {
                 .map(|&j| votes[j].score.max(MIN_CHUNK_SCORE))
                 .sum();
             let num: f32 = members.iter().map(|&j| votes[j].score).sum();
-            let confidence = if denom > 0.0 {
+            let share = if denom > 0.0 {
                 (num / denom).clamp(0.0, 1.0)
             } else {
                 0.0
             };
+            let corroboration =
+                ((members.len() as f32 - 1.0) / (CORROBORATION as f32 - 1.0)).clamp(0.0, 1.0);
+            let confidence = share * corroboration;
 
             let offset = self.refine(clip, votes, &members, offset);
             out.push(SyncResult { offset, confidence });
@@ -384,18 +393,26 @@ pub struct Arranged {
 
 /// Consecutive clips may overlap by this much (metadata rounding).
 const OVERLAP_TOL: f64 = 0.5;
-/// Bonus when the found gap between two clips agrees with their timestamps.
+/// Relative bonus when the found gap between two clips agrees with their timestamps.
 const TIMESTAMP_BONUS: f32 = 0.15;
 const TIMESTAMP_TOL: f64 = 3.0;
 
 /// Pick one candidate per clip so that clips (in recording order) never
-/// overlap, maximizing total confidence. `current` supplies fallback offsets.
+/// overlap, maximizing the audio explained: each match is worth its
+/// confidence times the seconds of the clip that lie inside the master
+/// (`master_len`), so a long clip with a decent match beats a few seconds
+/// with a perfect one. `current` supplies fallback offsets.
 pub fn arrange(
     clips: &[ClipInfo],
     candidates: &[Vec<SyncResult>],
     current: &[f64],
+    master_len: f64,
 ) -> Vec<Arranged> {
     let n = clips.len();
+    let weight = |i: usize, r: &SyncResult| -> f32 {
+        let inside = (r.offset + clips[i].duration).min(master_len) - r.offset.max(0.0);
+        r.confidence * inside.max(0.0) as f32
+    };
     let usable: Vec<Vec<SyncResult>> = candidates
         .iter()
         .map(|c| {
@@ -427,7 +444,8 @@ pub fn arrange(
             // Skip clip i: it will be placed from timestamps later.
             relax(state, score, state);
             for (ci, cand) in usable[i].iter().enumerate() {
-                let mut s = score + cand.confidence;
+                let w = weight(i, cand);
+                let mut s = score + w;
                 if let Some((j, cj)) = state {
                     let prev = usable[j][cj];
                     let span: f64 = (j..i).map(|k| clips[k].duration).sum();
@@ -436,7 +454,7 @@ pub fn arrange(
                     }
                     if let (Some(a), Some(b)) = (clips[j].start_time, clips[i].start_time) {
                         if ((cand.offset - prev.offset) - (b - a)).abs() <= TIMESTAMP_TOL {
-                            s += TIMESTAMP_BONUS;
+                            s += TIMESTAMP_BONUS * w;
                         }
                     }
                 }
@@ -507,22 +525,62 @@ pub fn arrange(
     out
 }
 
-/// Recording start times for a camera's clips from their `creation_time`
-/// stamps. Some phones stamp the end of the recording instead; that shows
-/// as a gap shorter than the clip, and then all stamps are shifted back.
-pub fn start_times(creation: &[Option<f64>], durations: &[f64]) -> Vec<Option<f64>> {
-    let ends_stamped = creation
-        .windows(2)
-        .zip(durations)
-        .any(|(w, &d)| match (w[0], w[1]) {
-            (Some(a), Some(b)) => b - a < d - 1.0,
-            _ => false,
-        });
-    creation
+/// Recording start times for a camera's clips, on the camera's own clock.
+///
+/// Android names its files after the recording start, which is worth more
+/// than any container stamp; when every clip has such a name those are used.
+/// Otherwise the `creation_time` stamps are read as starts, unless the
+/// camera is known to stamp the end ([`Clip::end_stamped`]) or the stamps
+/// only make sense as ends.
+pub fn clip_start_times(clips: &[Clip]) -> Vec<Option<f64>> {
+    let named: Vec<Option<f64>> = clips.iter().map(|c| time_in_name(&c.file_name())).collect();
+    if !clips.is_empty() && named.iter().all(|t| t.is_some()) {
+        return named;
+    }
+    let creation: Vec<Option<f64>> = clips
         .iter()
-        .zip(durations)
-        .map(|(c, &d)| c.map(|t| if ends_stamped { t - d } else { t }))
-        .collect()
+        .map(|c| c.creation_time.as_deref().and_then(parse_iso_seconds))
+        .collect();
+    let durations: Vec<f64> = clips.iter().map(|c| c.duration).collect();
+    let end_stamped = clips.iter().any(|c| c.end_stamped);
+    start_times(&creation, &durations, end_stamped)
+}
+
+/// Start times from `creation_time` stamps. Some phones stamp the end of
+/// the recording instead (`end_stamped`, or detectable as a gap shorter
+/// than the clip); then all stamps are shifted back. Files that share one
+/// stamp are chapters of a single recording (GoPro splits long recordings
+/// at 4 GB and stamps every part with the recording's start), so each
+/// chapter starts where the previous one ended.
+pub fn start_times(
+    creation: &[Option<f64>],
+    durations: &[f64],
+    end_stamped: bool,
+) -> Vec<Option<f64>> {
+    let same = |a: f64, b: f64| (a - b).abs() < 1.0;
+    let ends_stamped = end_stamped
+        || creation
+            .windows(2)
+            .zip(durations)
+            .any(|(w, &d)| match (w[0], w[1]) {
+                (Some(a), Some(b)) => !same(a, b) && b - a < d - 1.0,
+                _ => false,
+            });
+    let mut out = Vec::with_capacity(creation.len());
+    // Stamp and end of the previous clip, to chain chapters.
+    let mut prev: Option<(f64, f64)> = None;
+    for (c, &d) in creation.iter().zip(durations) {
+        let start = c.map(|t| match prev {
+            Some((stamp, end)) if same(stamp, t) && !ends_stamped => end,
+            _ if ends_stamped => t - d,
+            _ => t,
+        });
+        if let (Some(t), Some(s)) = (*c, start) {
+            prev = Some((t, s + d));
+        }
+        out.push(start);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -633,10 +691,76 @@ mod tests {
                 confidence: 0.9,
             }],
         ];
-        let r = arrange(&clips, &cands, &[0.0, 0.0]);
+        let r = arrange(&clips, &cands, &[0.0, 0.0], 10_000.0);
         assert_eq!(r[0].offset, 200.0);
         assert_eq!(r[1].offset, 320.0);
         assert_eq!(r[0].placement, Placement::Audio);
+    }
+
+    #[test]
+    fn lone_chunk_is_not_a_match() {
+        // A 10 s clip holds a single chunk, and a single chunk correlates
+        // with something in a long master by chance. Its vote alone must
+        // not produce a confident candidate.
+        let rate = SYNC_RATE as usize;
+        let master = music(600 * rate, 5);
+        let stranger = music(10 * rate, 99);
+        let m = Master::new(Arc::new(master.clone()));
+        let c = m.candidates(&stranger);
+        assert!(
+            c.iter().all(|r| r.confidence < MIN_CONFIDENCE),
+            "stranger got {c:?}"
+        );
+        // Even the genuine 10 s excerpt: no corroboration, no confidence.
+        let real = master[100 * rate..110 * rate].to_vec();
+        let c = m.candidates(&real);
+        assert!(c.iter().all(|r| r.confidence < MIN_CONFIDENCE), "{c:?}");
+        // 30 s gives three agreeing chunks and full credit again.
+        let real = master[100 * rate..130 * rate].to_vec();
+        let c = m.candidates(&real);
+        assert!((c[0].offset - 100.0).abs() < 0.002, "{c:?}");
+        assert!(c[0].confidence > 0.8, "{c:?}");
+    }
+
+    #[test]
+    fn arrange_prefers_the_audio_it_explains() {
+        // Two 10 s clips with "perfect" matches around a 20 min clip whose
+        // decent match they contradict: the long clip wins.
+        let clips = [
+            ClipInfo {
+                duration: 10.0,
+                start_time: None,
+            },
+            ClipInfo {
+                duration: 1200.0,
+                start_time: None,
+            },
+            ClipInfo {
+                duration: 10.0,
+                start_time: None,
+            },
+        ];
+        let cands = vec![
+            vec![SyncResult {
+                offset: 60.0,
+                confidence: 1.0,
+            }],
+            vec![SyncResult {
+                offset: -20.0,
+                confidence: 0.7,
+            }],
+            vec![SyncResult {
+                offset: 40.0,
+                confidence: 1.0,
+            }],
+        ];
+        let r = arrange(&clips, &cands, &[0.0, 0.0, 0.0], 1600.0);
+        assert_eq!(r[1].placement, Placement::Audio);
+        assert_eq!(r[1].offset, -20.0);
+        assert_eq!(r[0].placement, Placement::Timestamp);
+        assert!((r[0].offset + 30.0).abs() < 1e-9, "{:?}", r[0]);
+        assert_eq!(r[2].placement, Placement::Timestamp);
+        assert!((r[2].offset - 1180.0).abs() < 1e-9, "{:?}", r[2]);
     }
 
     #[test]
@@ -658,7 +782,7 @@ mod tests {
                 confidence: 0.7,
             }],
         ];
-        let r = arrange(&clips, &cands, &[0.0, 0.0]);
+        let r = arrange(&clips, &cands, &[0.0, 0.0], 10_000.0);
         assert_eq!(r[0].placement, Placement::Timestamp);
         assert!((r[0].offset - 370.0).abs() < 1e-9);
         assert_eq!(r[0].confidence, 0.0);
@@ -667,10 +791,71 @@ mod tests {
     #[test]
     fn detects_end_stamped_creation_times() {
         // Android: stamps 1000 and 1500 with a 900 s first clip → stamps are ends.
-        let s = start_times(&[Some(1000.0), Some(1500.0)], &[900.0, 400.0]);
+        let s = start_times(&[Some(1000.0), Some(1500.0)], &[900.0, 400.0], false);
         assert_eq!(s, vec![Some(100.0), Some(1100.0)]);
         // GoPro: stamps 1000 and 2000 with a 900 s first clip → starts.
-        let s = start_times(&[Some(1000.0), Some(2000.0)], &[900.0, 400.0]);
+        let s = start_times(&[Some(1000.0), Some(2000.0)], &[900.0, 400.0], false);
         assert_eq!(s, vec![Some(1000.0), Some(2000.0)]);
+        // The gap cannot tell when the second clip is longer; the probe's
+        // verdict does.
+        let s = start_times(&[Some(1000.0), Some(4000.0)], &[900.0, 2500.0], true);
+        assert_eq!(s, vec![Some(100.0), Some(1500.0)]);
+    }
+
+    #[test]
+    fn chapters_share_a_stamp_and_follow_each_other() {
+        // GoPro: GX010053 and GX020053 both carry 1000; the chapter must
+        // start where the first part ended, and the shared stamp must not
+        // pass for end-stamping (that used to shift the whole camera).
+        let s = start_times(
+            &[Some(0.0), Some(1000.0), Some(1000.0), Some(3000.0)],
+            &[10.0, 1700.0, 88.0, 600.0],
+            false,
+        );
+        assert_eq!(s, vec![Some(0.0), Some(1000.0), Some(2700.0), Some(3000.0)]);
+    }
+
+    #[test]
+    fn file_names_beat_stamps() {
+        let clip = |name: &str, ct: &str, d: f64| Clip {
+            path: std::path::PathBuf::from(name),
+            duration: d,
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            rotation: 0,
+            hdr: false,
+            has_audio: true,
+            creation_time: Some(ct.into()),
+            end_stamped: true,
+            offset: 0.0,
+            sync_confidence: None,
+        };
+        // Android: names hold the local start, stamps the UTC end.
+        let clips = [
+            clip(
+                "VID_20260820_191928.mp4",
+                "2026-08-20T17:46:56.000000Z",
+                1647.6,
+            ),
+            clip(
+                "VID_20260820_201710.mp4",
+                "2026-08-20T19:22:13.000000Z",
+                3902.3,
+            ),
+        ];
+        let s = clip_start_times(&clips);
+        assert!(
+            (s[1].unwrap() - s[0].unwrap() - 3462.0).abs() < 1e-6,
+            "{s:?}"
+        );
+        // Without usable names the end stamps are shifted back instead.
+        let clips = [
+            clip("a.mp4", "2026-08-20T17:46:56.000000Z", 1647.6),
+            clip("b.mp4", "2026-08-20T19:22:13.000000Z", 3902.3),
+        ];
+        let s = clip_start_times(&clips);
+        let want = 5717.0 - 3902.3 + 1647.6;
+        assert!((s[1].unwrap() - s[0].unwrap() - want).abs() < 0.01, "{s:?}");
     }
 }

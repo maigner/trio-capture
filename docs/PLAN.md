@@ -332,3 +332,22 @@ neutralised against a warm bar. `Grade::apply` is a CPU mirror of the
 shader used by the unit tests. On the gig project the three cameras land
 within a few percent in mean luma and the analysis takes about a second
 with VAAPI.
+
+**Sync robustness (2026-09-04, Livestream shoot).** A whole evening in one
+folder (10 GoPro clips, two per phone, one WAV covering a single set) broke
+auto-sync in two ways. Two 10-second GoPro clips hold a single analysis
+chunk each, and a lone chunk correlates with something in a 28-minute
+master by chance (scores 0.55–0.62, the same range unrelated chunks reach);
+with nothing to disagree they scored confidence 1.0 and the arranger
+preferred them over the real 26-minute clip they conflicted with. Confidence
+is now the vote share times a corroboration factor (`CORROBORATION` = 3
+agreeing chunks for full credit, a lone chunk gets none), and `arrange`
+maximises confidence × seconds inside the master instead of summing
+confidences. The timestamp fallback was also wrong: GoPro chapter files
+share the recording's `creation_time`, which the end-stamp heuristic read as
+proof of end-stamping and shifted the whole camera; Android stamps the end
+(`com.android.version` present → `Clip::end_stamped`) but names files after
+the start, so `clip_start_times` prefers a `yyyymmdd_hhmmss` time in the
+name, ignores identical stamps in the end-stamp vote and chains chapters.
+Result: the three set clips match at −17.7/−11.8/−9.3 s, the second set
+lands at 3444–3453 s on all cameras, the chapter follows its first part.

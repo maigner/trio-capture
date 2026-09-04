@@ -68,6 +68,7 @@ fn parse_probe(path: &Path, v: &Value) -> Result<Clip> {
         .as_str()
         .or_else(|| video["tags"]["creation_time"].as_str())
         .map(|s| s.to_string());
+    let end_stamped = v["format"]["tags"]["com.android.version"].is_string();
 
     Ok(Clip {
         path: path.to_path_buf(),
@@ -79,6 +80,7 @@ fn parse_probe(path: &Path, v: &Value) -> Result<Clip> {
         hdr,
         has_audio,
         creation_time,
+        end_stamped,
         offset: 0.0,
         sync_confidence: None,
     })
