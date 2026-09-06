@@ -3,7 +3,8 @@
 use bytemuck::{Pod, Zeroable};
 
 use trio_core::layout::slot_rects;
-use trio_core::{Grade, Project, Slot};
+use trio_core::motion::framing;
+use trio_core::{Grade, Project};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Default)]
@@ -22,6 +23,7 @@ impl Uniforms {
         out_w: u32,
         out_h: u32,
         src: &[Option<(u32, u32)>; 3],
+        t: f64,
     ) -> Self {
         let rects = slot_rects(project.layout);
         let mut u = Uniforms {
@@ -30,8 +32,9 @@ impl Uniforms {
         };
         for (i, r) in rects.iter().enumerate() {
             u.slot_rect[i] = [r.x, r.y, r.w, r.h];
-            let s: Slot = project.slots[i];
-            u.slot_params[i] = [s.zoom, s.pan[0], s.pan[1], s.camera.min(2) as f32];
+            let cam = project.slots[i].camera.min(2);
+            let (zoom, pan) = framing(project, i, src[cam].unwrap_or((16, 9)), t);
+            u.slot_params[i] = [zoom, pan[0], pan[1], cam as f32];
         }
         for i in 0..3 {
             let g: Grade = project.cameras.get(i).map(|c| c.grade).unwrap_or_default();
@@ -284,9 +287,10 @@ impl Compositor {
         target.src_sizes[cam] = None;
     }
 
-    pub fn render(&self, target: &Target, project: &Project) {
+    /// Compose the uploaded frames as they appear at master time `t`.
+    pub fn render(&self, target: &Target, project: &Project, t: f64) {
         let uniforms =
-            Uniforms::from_project(project, target.width, target.height, &target.src_sizes);
+            Uniforms::from_project(project, target.width, target.height, &target.src_sizes, t);
         self.queue
             .write_buffer(&target.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let mut encoder = self

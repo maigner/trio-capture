@@ -128,6 +128,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Color32::from_white_alpha(180),
         );
     }
+    // The face boxes the movement keeps in view, while arranging.
+    if app.step == crate::panels::Step::Arrange && app.project.motion != trio_core::Motion::Off {
+        let t = app.clock.time();
+        for (i, r) in rects.iter().enumerate() {
+            let cam = app.project.slots[i].camera.min(2);
+            let boxes = app.project.cameras[cam]
+                .subject
+                .as_ref()
+                .and_then(|s| s.at(t));
+            let (Some(src), Some(sub)) = (app.preview.src_sizes[cam], boxes) else {
+                continue;
+            };
+            let rr = Rect::from_min_size(
+                rect.min + egui::vec2(r.x * rect.width(), r.y * rect.height()),
+                egui::vec2(r.w * rect.width(), r.h * rect.height()),
+            );
+            let vb = trio_core::motion::visible_box(&app.project, i, src, t);
+            let sx = |x: f32| rr.min.x + (x - vb[0]) / (vb[2] - vb[0]).max(1e-4) * rr.width();
+            let sy = |y: f32| rr.min.y + (y - vb[1]) / (vb[3] - vb[1]).max(1e-4) * rr.height();
+            let f = sub.faces;
+            let face_rect = Rect::from_min_max(
+                egui::pos2(sx(f[0]), sy(f[1])),
+                egui::pos2(sx(f[2]), sy(f[3])),
+            );
+            let clipped = painter.with_clip_rect(rr);
+            clipped.rect_stroke(
+                face_rect,
+                2.0,
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 200, 80, 110)),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
     let hint = match app.project.layout.orientation() {
         Orientation::Horizontal => "16:9",
         Orientation::Vertical => "9:16",

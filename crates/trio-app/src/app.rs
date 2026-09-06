@@ -45,6 +45,9 @@ pub struct App {
     pub sync_progress: (usize, usize),
     pub grading: bool,
     pub grade_progress: (usize, usize),
+    /// The subject finder is running.
+    pub framing: bool,
+    pub frame_progress: (usize, usize),
     /// What the last auto grade produced, so the Colour step can undo edits.
     pub auto_grades: Option<[Grade; 3]>,
     /// Preview without any grade, toggled in the Colour step.
@@ -118,6 +121,8 @@ impl App {
             syncing: false,
             sync_progress: (0, 0),
             grading: false,
+            framing: false,
+            frame_progress: (0, 0),
             grade_progress: (0, 0),
             auto_grades: None,
             show_original: false,
@@ -270,6 +275,7 @@ impl App {
                 }
                 self.ensure_hwaccel();
                 self.step = Step::Arrange;
+                self.maybe_find_subjects();
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
@@ -356,6 +362,35 @@ impl App {
         self.grade_progress = (0, total);
         self.status = format!("Auto grading 0/{total} frames…");
         self.jobs.auto_grade(self.project.clone(), self.hwaccel);
+    }
+
+    /// Find where the people are in every camera, for the automatic
+    /// movement. Runs after auto-sync and when a project without the boxes
+    /// is opened, and from the Arrange step.
+    pub fn start_find_subjects(&mut self) {
+        if self.framing {
+            return;
+        }
+        let total = trio_media::subject::sample_total(&self.project);
+        if total == 0 {
+            self.error = Some("Nothing to look at: no clips on the timeline".into());
+            return;
+        }
+        self.framing = true;
+        self.frame_progress = (0, total);
+        self.status = format!("Looking for the people 0/{total}…");
+        self.jobs.find_subjects(self.project.clone(), self.hwaccel);
+    }
+
+    fn maybe_find_subjects(&mut self) {
+        let missing = self
+            .project
+            .cameras
+            .iter()
+            .any(|c| !c.clips.is_empty() && c.subject.is_none());
+        if missing && trio_media::subject::sample_total(&self.project) > 0 {
+            self.start_find_subjects();
+        }
     }
 
     fn maybe_auto_grade(&mut self) {
@@ -478,6 +513,7 @@ impl App {
                 self.sync_unmatched.clear();
                 self.project_changed();
                 self.maybe_auto_grade();
+                self.maybe_find_subjects();
             }
             JobResult::GradeProgress => {
                 self.grade_progress.0 += 1;
@@ -508,6 +544,31 @@ impl App {
                     Err(e) => {
                         self.status = "Auto grade failed".into();
                         self.error = Some(format!("Auto grade: {e:#}"));
+                    }
+                }
+            }
+            JobResult::SubjectProgress => {
+                self.frame_progress.0 += 1;
+                self.status = format!(
+                    "Looking for the people {}/{}…",
+                    self.frame_progress.0, self.frame_progress.1
+                );
+            }
+            JobResult::Subjects(result) => {
+                self.framing = false;
+                match result {
+                    Ok(subjects) => {
+                        let mut found = 0;
+                        for (cam, s) in self.project.cameras.iter_mut().zip(subjects) {
+                            found += s.is_some() as usize;
+                            cam.subject = s;
+                        }
+                        self.dirty = true;
+                        self.status = format!("Found the people in {found} of 3 cameras");
+                    }
+                    Err(e) => {
+                        self.status = "Could not look for the people".into();
+                        self.error = Some(format!("Finding the people: {e:#}"));
                     }
                 }
             }
@@ -600,9 +661,9 @@ impl App {
             for c in ungraded.cameras.iter_mut() {
                 c.grade = Grade::default();
             }
-            self.comp.render(&self.preview, &ungraded);
+            self.comp.render(&self.preview, &ungraded, t);
         } else {
-            self.comp.render(&self.preview, &self.project);
+            self.comp.render(&self.preview, &self.project, t);
         }
         if self.clock.is_playing() || self.streams.busy() {
             ctx.request_repaint();

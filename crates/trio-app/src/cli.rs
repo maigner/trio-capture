@@ -19,6 +19,7 @@ pub fn run(args: &[String]) -> Result<()> {
         "sync" => cmd_sync(&args[1..]),
         "export" => cmd_export(&args[1..]),
         "grade" => cmd_grade(&args[1..]),
+        "people" => cmd_people(&args[1..]),
         "probe" => {
             for p in &args[1..] {
                 println!("{:#?}", trio_core::probe::probe_clip(Path::new(p))?);
@@ -36,6 +37,7 @@ fn usage() -> anyhow::Error {
          trio-capture sync <project.trio.json>\n  \
          trio-capture export <project.trio.json> [--out FILE]\n  \
          trio-capture grade <project.trio.json>\n  \
+         trio-capture people <project.trio.json>\n  \
          trio-capture probe FILE..."
     )
 }
@@ -129,6 +131,56 @@ fn cmd_sync(args: &[String]) -> Result<()> {
             clip.sync_confidence = Some(r.confidence);
         }
     }
+    project::save(&proj, &path)?;
+    Ok(())
+}
+
+/// Find the people in every camera and store the boxes in the project.
+fn cmd_people(args: &[String]) -> Result<()> {
+    let path = PathBuf::from(args.first().ok_or_else(usage)?);
+    let mut proj = project::load(&path)?;
+    let hwaccel = proj
+        .cameras
+        .iter()
+        .flat_map(|c| c.clips.first())
+        .next()
+        .map(|c| detect_hwaccel(&c.path))
+        .unwrap_or_default_none();
+    let started = std::time::Instant::now();
+    let subjects = trio_media::subject::find_subjects(&proj, hwaccel, &|| {})?;
+    for (cam, s) in proj.cameras.iter_mut().zip(subjects) {
+        match &s {
+            Some(s) => {
+                let f = s.faces_overall().unwrap_or([0.0; 4]);
+                println!(
+                    "{:<12} {} samples, faces overall x {:.2}..{:.2}  y {:.2}..{:.2}",
+                    cam.name,
+                    s.samples.len(),
+                    f[0],
+                    f[2],
+                    f[1],
+                    f[3]
+                );
+                for x in &s.samples {
+                    println!(
+                        "    {:8.1}s  faces x {:.2}..{:.2} y {:.2}..{:.2}   people x {:.2}..{:.2} y {:.2}..{:.2}",
+                        x.t,
+                        x.faces[0],
+                        x.faces[2],
+                        x.faces[1],
+                        x.faces[3],
+                        x.people[0],
+                        x.people[2],
+                        x.people[1],
+                        x.people[3]
+                    );
+                }
+            }
+            None => println!("{:<12} nobody found", cam.name),
+        }
+        cam.subject = s;
+    }
+    println!("analysed in {:.1}s", started.elapsed().as_secs_f64());
     project::save(&proj, &path)?;
     Ok(())
 }
@@ -230,7 +282,7 @@ fn cmd_export(args: &[String]) -> Result<()> {
                 }
             }
         }
-        comp.render(&target, &proj);
+        comp.render(&target, &proj, t);
         tracing::debug!("frame {f}: readback");
         let bytes = comp.readback(&mut target);
         tracing::debug!("frame {f}: encode");

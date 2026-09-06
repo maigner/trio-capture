@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use trio_core::discover::scan_folder;
 use trio_core::sync::{Arranged, Master, SYNC_RATE};
-use trio_core::{Camera, Clip, Grade, Project};
+use trio_core::{Camera, Clip, Grade, Project, Subject};
 use trio_media::audio::decode_pcm;
 use trio_media::ffmpeg::{detect_hwaccel, HwAccel};
 
@@ -37,6 +37,9 @@ pub enum JobResult {
     /// One sample frame has been analysed for the auto grade (progress only).
     GradeProgress,
     Graded(Result<Vec<Grade>>),
+    /// One frame pair has been analysed for the subject finder (progress only).
+    SubjectProgress,
+    Subjects(Result<Vec<Option<Subject>>>),
 }
 
 pub struct JobHub {
@@ -62,7 +65,10 @@ impl JobHub {
         for r in &out {
             if !matches!(
                 r,
-                JobResult::Synced { .. } | JobResult::SyncProgress | JobResult::GradeProgress
+                JobResult::Synced { .. }
+                    | JobResult::SyncProgress
+                    | JobResult::GradeProgress
+                    | JobResult::SubjectProgress
             ) {
                 self.running = self.running.saturating_sub(1);
             }
@@ -135,6 +141,17 @@ impl JobHub {
                 ctx.request_repaint();
             });
             let _ = tx.send(JobResult::Graded(result));
+        });
+    }
+
+    pub fn find_subjects(&mut self, project: Project, hwaccel: HwAccel) {
+        let ctx = self.ctx.clone();
+        self.spawn(move |tx| {
+            let result = trio_media::subject::find_subjects(&project, hwaccel, &|| {
+                let _ = tx.send(JobResult::SubjectProgress);
+                ctx.request_repaint();
+            });
+            let _ = tx.send(JobResult::Subjects(result));
         });
     }
 

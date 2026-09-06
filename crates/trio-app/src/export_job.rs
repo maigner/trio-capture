@@ -121,7 +121,7 @@ impl ExportJob {
                     }
                 }
             }
-            comp.render(&self.target, &self.project);
+            comp.render(&self.target, &self.project, t);
             let bytes = comp.readback(&mut self.target);
             if let Err(e) = self.encoder.as_mut().unwrap().write_frame(&bytes) {
                 self.error = Some(format!("{e:#}"));

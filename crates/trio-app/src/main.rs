@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(first) = args.first() {
         if matches!(
             first.as_str(),
-            "new" | "sync" | "export" | "grade" | "probe"
+            "new" | "sync" | "export" | "grade" | "people" | "probe"
         ) {
             return cli::run(&args);
         }

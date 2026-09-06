@@ -463,3 +463,44 @@ still open on a click. The one action each step is about is a large filled
 `primary_button`: *Open shoot folder…*, *Match cameras automatically*,
 *Choose/Change output file…*, *Start export* and *Next: …*. The output path
 text field is gone; the chosen path is shown under the button.
+
+## Automatic movement that keeps the faces in view (2026-09-06)
+
+The Arrange step has a *Movement* setting (`Project.motion`: Off / Subtle /
+Lively, stored in the project; new projects start at Subtle, old files
+without the field at Off). `trio_core::motion::framing` turns a slot's own
+zoom and pan into the effective ones at master time `t`: a slow zoom
+"breath" (up to 12 % at Lively, always a little so the pan has room) and a
+pan drift (up to 8 % of the visible region), each a sum of two sines with
+incommensurate periods between 11 and 41 s and a phase per slot. It is a
+pure function of `t`, so the preview and the export agree, and
+`Compositor::render` now takes the time.
+
+The movement is held back by where the people are. `trio_core::autoframe`
+finds them from motion alone: at sample moments over the whole timeline
+(every 12 s, at most 300 per camera) three small frames half a second apart
+are decoded (`trio_media::subject::find_subjects`, `grab_frames`), the luma
+difference is taken on 2x2 blocks after equalising the brightness of every
+8x8 tile between the frames (auto exposure and flicker then cancel, real
+movement does not), bright saturated pixels are ignored (neon signs, LED
+ropes), and the result is accumulated on a 64x64 grid. Dense regions seed a
+region growing that keeps weaker moving cells touching them (a nodding
+head next to strumming hands) and drops scattered specks; samples where
+the moving cells cover more than 35 % of the frame (a camera bump) are
+skipped. The *people* box holds 94 % of the remaining mass; the *faces*
+box is the skin-toned part of it when skin covers less than 20 % of the
+frame (white light), otherwise the top 40 % of the people box extended a
+little upward, because under warm stage light everything looks like skin.
+
+One `SubjectSample {t, faces, people}` per moment is stored in
+`Camera.subject`; `Subject::at(t)` joins each sample with its neighbours
+and interpolates, so a walking singer stays inside and the boxes change
+smoothly. `framing` zooms toward the face centre, never closer than the
+face box allows, then moves the crop the least distance that keeps the
+people box and then the face box (with margin and headroom) inside the
+visible region, on each axis where the box fits the user's own framing;
+where it does not (a slot zoomed far into one player), the user's framing
+is left alone rather than re-centred on something that cannot be shown. The finder runs after auto-sync and when a
+project without boxes is opened; the Arrange step shows its progress, and
+the preview draws the face box in yellow while arranging. `trio-capture
+people <project>` runs it from the command line.

@@ -12,6 +12,9 @@ pub struct Project {
     pub slots: [Slot; CAMERA_COUNT],
     pub output: OutputSettings,
     pub range: Range,
+    /// Slow automatic pan and zoom on top of the slot framing.
+    #[serde(default)]
+    pub motion: Motion,
 }
 
 impl Default for Project {
@@ -45,6 +48,7 @@ impl Default for Project {
                 start: 0.0,
                 end: 0.0,
             },
+            motion: Motion::Subtle,
         }
     }
 }
@@ -92,6 +96,57 @@ pub struct Camera {
     pub clips: Vec<Clip>,
     #[serde(default)]
     pub grade: Grade,
+    /// Where the people are in this camera's picture, found automatically.
+    #[serde(default)]
+    pub subject: Option<Subject>,
+}
+
+/// Where the people are in a camera's picture over time, one sample per
+/// moment analysed. See `autoframe`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Subject {
+    pub samples: Vec<SubjectSample>,
+}
+
+/// Boxes are x0, y0, x1, y1 in 0..1 of the (rotated) source frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct SubjectSample {
+    /// Master time of the sample.
+    pub t: f64,
+    /// Where the faces are; stays in view whatever the movement.
+    pub faces: [f32; 4],
+    /// Everything that moves: the whole band and their instruments.
+    pub people: [f32; 4],
+}
+
+/// How much the automatic movement pans and zooms.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum Motion {
+    #[default]
+    Off,
+    Subtle,
+    Lively,
+}
+
+impl Motion {
+    pub const ALL: [Motion; 3] = [Motion::Off, Motion::Subtle, Motion::Lively];
+
+    /// 0 = still, 1 = the full movement.
+    pub fn amount(self) -> f32 {
+        match self {
+            Motion::Off => 0.0,
+            Motion::Subtle => 0.5,
+            Motion::Lively => 1.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Motion::Off => "Off",
+            Motion::Subtle => "Subtle",
+            Motion::Lively => "Lively",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

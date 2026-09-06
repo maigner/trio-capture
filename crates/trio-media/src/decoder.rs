@@ -97,6 +97,36 @@ pub fn grab_frame(req: &DecodeRequest) -> Result<Frame> {
     })
 }
 
+/// Decode `count` frames `gap` seconds apart, the first at `req.start`.
+pub fn grab_frames(req: &DecodeRequest, count: usize, gap: f64) -> Result<Vec<Frame>> {
+    let mut filters = picture_filters(req);
+    filters.push(format!("fps={:.6}", 1.0 / gap.max(0.01)));
+    let vf = filters.join(",");
+    let out = decode_command(req, &vf)
+        .args(["-frames:v", &count.to_string()])
+        .args(["-pix_fmt", "rgba", "-f", "rawvideo", "-"])
+        .output()
+        .context("spawning ffmpeg for a frame series")?;
+    let want = (req.width * req.height * 4) as usize;
+    if out.stdout.len() < count * want {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!(
+            "fewer than {count} frames at {:.2}s in {}: {}",
+            req.start,
+            req.path.display(),
+            err.trim()
+        ));
+    }
+    Ok((0..count)
+        .map(|k| Frame {
+            time: req.start + k as f64 * gap,
+            width: req.width,
+            height: req.height,
+            rgba: out.stdout[k * want..(k + 1) * want].to_vec(),
+        })
+        .collect())
+}
+
 impl FrameStream {
     pub fn start(req: DecodeRequest) -> Result<Self> {
         let mut filters = picture_filters(&req);

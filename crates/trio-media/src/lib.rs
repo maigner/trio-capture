@@ -7,4 +7,5 @@ pub mod export;
 pub mod ffmpeg;
 pub mod grade;
 pub mod player;
+pub mod subject;
 pub mod sync;

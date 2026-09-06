@@ -2,7 +2,7 @@ use crate::app::App;
 use crate::timeline::fmt_time;
 use egui::{Color32, RichText};
 use std::path::PathBuf;
-use trio_core::{Codec, Grade, LayoutId, Orientation};
+use trio_core::{Codec, Grade, LayoutId, Motion, Orientation};
 
 /// The four steps of the sidebar, shown top to bottom in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,7 +288,16 @@ fn step_summary(app: &App, step: Step) -> String {
                 .iter()
                 .map(|s| app.project.cameras[s.camera.min(2)].name.as_str())
                 .collect();
-            format!("{} · {}", app.project.layout.label(), names.join(", "))
+            let motion = match app.project.motion {
+                Motion::Off => "",
+                Motion::Subtle => " · subtle movement",
+                Motion::Lively => " · lively movement",
+            };
+            format!(
+                "{} · {}{motion}",
+                app.project.layout.label(),
+                names.join(", ")
+            )
         }
         Step::Colour => {
             let has_clips = app.project.cameras.iter().any(|c| !c.clips.is_empty());
@@ -588,6 +597,71 @@ fn arrange_step(app: &mut App, ui: &mut egui::Ui) {
             app.dirty = true;
         }
     });
+    ui.add_space(10.0);
+    ui.heading("Movement");
+    ui.label(
+        "Slowly moves and zooms each camera a little, so the picture feels alive. \
+         The faces stay in view.",
+    );
+    ui.horizontal(|ui| {
+        for m in Motion::ALL {
+            let hint = match m {
+                Motion::Off => "The picture stands still",
+                Motion::Subtle => "A gentle breathing, barely noticed",
+                Motion::Lively => "Clearly moving, like a slow hand-held camera",
+            };
+            if ui
+                .selectable_label(app.project.motion == m, m.label())
+                .on_hover_text(hint)
+                .clicked()
+            {
+                app.project.motion = m;
+                app.dirty = true;
+            }
+        }
+    });
+    if app.project.motion != Motion::Off {
+        let with_clips = app
+            .project
+            .cameras
+            .iter()
+            .filter(|c| !c.clips.is_empty())
+            .count();
+        let found = app
+            .project
+            .cameras
+            .iter()
+            .filter(|c| !c.clips.is_empty() && c.subject.is_some())
+            .count();
+        if app.framing {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(format!(
+                    "Looking for the people in the picture… {}/{}",
+                    app.frame_progress.0, app.frame_progress.1
+                ));
+            });
+        } else if with_clips > 0 {
+            let text = if found == with_clips {
+                "The people were found in every camera; the yellow box in the preview \
+                 shows what always stays in view."
+                    .to_string()
+            } else if found == 0 {
+                "Nobody found yet, so the movement only stays inside the frame.".to_string()
+            } else {
+                format!("People found in {found} of {with_clips} cameras.")
+            };
+            ui.weak(text);
+            if found < with_clips
+                && ui
+                    .small_button("Look for the people again")
+                    .on_hover_text("Analyses a few moments of every camera once more")
+                    .clicked()
+            {
+                app.start_find_subjects();
+            }
+        }
+    }
 }
 
 /// The current layout drawn large, one clickable box per slot with the

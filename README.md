@@ -81,6 +81,10 @@ click. The big blue button in each step is the thing to do there.
    layout is drawn large; click a slot to move it on to the next camera, or
    use the camera buttons under it. In the preview, drag inside a slot to
    move the picture and scroll to zoom; *Reset framing* undoes that.
+   *Movement* (Off / Subtle / Lively) lets every camera slowly drift and
+   breathe so the picture feels alive. The people in each camera are found
+   by themselves after the sync, and the movement always keeps their faces
+   in view; a yellow box in the preview shows what stays in the picture.
 3. **Match the colours**: the cameras are matched to each other
    automatically after sync. Click a slot to pick its camera, then move the
    plain sliders (brightness, contrast, colour, warmth, tint) until it looks
