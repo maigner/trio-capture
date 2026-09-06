@@ -420,7 +420,7 @@ editor. It shows three rows of plain choices:
 - **Size**: Full HD / 2K / 4K (still `width`/`height` in `OutputSettings`).
 - **Format**: *Standard* (H.264) or *Smaller file* (H.265). Switching keeps
   the current encoder engine (software, VAAPI, VideoToolbox).
-- **Quality**: Good / Better / Best, mapped to CRF or QP 23 / 20 / 17. A
+- **Quality**: Good / Better / Best, mapped to CRF or QP 28 / 20 / 17. A
   project with another value simply highlights none of the three.
 - **More** (collapsed): frame rate and the encoder, *Automatic* (default),
   *Processor* or *Graphics card*. `OutputSettings::auto_encoder` (serde

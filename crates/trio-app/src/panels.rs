@@ -869,7 +869,7 @@ fn colour_step(app: &mut App, ui: &mut egui::Ui) {
 
 /// Plain-language quality steps; the number is the CRF/QP handed to ffmpeg.
 const QUALITY_STEPS: [(&str, u32, &str); 3] = [
-    ("Good", 23, "Smaller file, fine for sharing online"),
+    ("Good", 28, "Much smaller file, fine for sharing online"),
     ("Better", 20, "A good balance of size and quality"),
     ("Best", 17, "Largest file, hard to tell from the original"),
 ];
