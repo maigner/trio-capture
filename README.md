@@ -38,6 +38,10 @@ any number of clips; they are ordered by recording time.
 The project file (`<folder name>.trio.json`) is saved into the shoot folder
 on Ctrl+S. Opening a folder that already contains one opens that project
 instead of importing again. Nothing is ever written into the camera folders.
+Files inside the shoot folder are stored by relative path, so a shoot synced
+to another machine opens as it is; older projects with absolute paths from
+another machine are relocated by looking for the same files near the project
+file.
 
 ## Requirements
 
