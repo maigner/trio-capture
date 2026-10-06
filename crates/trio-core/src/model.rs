@@ -48,7 +48,7 @@ impl Default for Project {
                 start: 0.0,
                 end: 0.0,
             },
-            motion: Motion::Subtle,
+            motion: Motion::Off,
         }
     }
 }

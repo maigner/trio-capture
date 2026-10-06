@@ -275,7 +275,6 @@ impl App {
                 }
                 self.ensure_hwaccel();
                 self.step = Step::Arrange;
-                self.maybe_find_subjects();
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
@@ -365,8 +364,10 @@ impl App {
     }
 
     /// Find where the people are in every camera, for the automatic
-    /// movement. Runs after auto-sync and when a project without the boxes
-    /// is opened, and from the Arrange step.
+    /// movement. It decodes a few hundred moments per camera and takes
+    /// minutes on a long set, so it never runs by itself on opening a
+    /// shoot: only when the movement is switched on and the boxes are
+    /// missing ([`Self::maybe_find_subjects`]), or from the Arrange step.
     pub fn start_find_subjects(&mut self) {
         if self.framing {
             return;
@@ -382,7 +383,11 @@ impl App {
         self.jobs.find_subjects(self.project.clone(), self.hwaccel);
     }
 
-    fn maybe_find_subjects(&mut self) {
+    /// Start the finder when the movement is on and a camera has no boxes yet.
+    pub fn maybe_find_subjects(&mut self) {
+        if self.project.motion == trio_core::Motion::Off {
+            return;
+        }
         let missing = self
             .project
             .cameras

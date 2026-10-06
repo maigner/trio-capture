@@ -467,8 +467,8 @@ text field is gone; the chosen path is shown under the button.
 ## Automatic movement that keeps the faces in view (2026-09-06)
 
 The Arrange step has a *Movement* setting (`Project.motion`: Off / Subtle /
-Lively, stored in the project; new projects start at Subtle, old files
-without the field at Off). `trio_core::motion::framing` turns a slot's own
+Lively, stored in the project; new projects and old files without the
+field start at Off, since 2026-10-06). `trio_core::motion::framing` turns a slot's own
 zoom and pan into the effective ones at master time `t`: a slow zoom
 "breath" (up to 12 % at Lively, always a little so the pan has room) and a
 pan drift (up to 8 % of the visible region), each a sum of two sines with
@@ -500,8 +500,10 @@ face box allows, then moves the crop the least distance that keeps the
 people box and then the face box (with margin and headroom) inside the
 visible region, on each axis where the box fits the user's own framing;
 where it does not (a slot zoomed far into one player), the user's framing
-is left alone rather than re-centred on something that cannot be shown. The finder runs after auto-sync and when a
-project without boxes is opened; the Arrange step shows its progress, and
+is left alone rather than re-centred on something that cannot be shown. The finder runs when the movement is switched on
+and a camera has no boxes yet (since 2026-10-06; before that it ran after
+every auto-sync and on opening a project without boxes, minutes that were
+wasted when the movement stayed off); the Arrange step shows its progress, and
 the preview draws the face box in yellow while arranging. `trio-capture
 people <project>` runs it from the command line.
 

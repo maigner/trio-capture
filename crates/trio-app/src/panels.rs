@@ -617,6 +617,7 @@ fn arrange_step(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.project.motion = m;
                 app.dirty = true;
+                app.maybe_find_subjects();
             }
         }
     });
@@ -652,10 +653,15 @@ fn arrange_step(app: &mut App, ui: &mut egui::Ui) {
                 format!("People found in {found} of {with_clips} cameras.")
             };
             ui.weak(text);
+            let label = if found == 0 {
+                "Look for the people"
+            } else {
+                "Look for the people again"
+            };
             if found < with_clips
                 && ui
-                    .small_button("Look for the people again")
-                    .on_hover_text("Analyses a few moments of every camera once more")
+                    .small_button(label)
+                    .on_hover_text("Analyses a few moments of every camera; takes a while")
                     .clicked()
             {
                 app.start_find_subjects();
