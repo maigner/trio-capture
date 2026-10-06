@@ -939,6 +939,33 @@ fn colour_step(app: &mut App, ui: &mut egui::Ui) {
         });
     app.project.cameras[cam].grade = grade;
     app.dirty |= changed;
+
+    ui.add_space(10.0);
+    ui.label("Picture timing");
+    ui.horizontal(|ui| {
+        let mut ms = app.project.cameras[cam].picture_delay * 1000.0;
+        ui.spacing_mut().slider_width = (ui.available_width() - 110.0).max(80.0);
+        let resp = ui
+            .add(
+                egui::Slider::new(&mut ms, -200.0..=200.0)
+                    .suffix(" ms")
+                    .step_by(1.0),
+            )
+            .on_hover_text(
+                "Shows this camera's picture later (positive) or earlier. The clips were \
+                 lined up by what each camera heard, and sound takes about 3 ms per metre \
+                 to reach a camera, so a camera 10 m from the band shows its picture about \
+                 30 ms early: enter 30. Double-click for 0.",
+            );
+        if resp.double_clicked() {
+            ms = 0.0;
+        }
+        if resp.changed() || resp.double_clicked() {
+            app.project.cameras[cam].picture_delay = ms / 1000.0;
+            app.project_changed();
+        }
+        ui.label(RichText::new("later").weak().small());
+    });
 }
 
 /// Plain-language quality steps; the number is the CRF/QP handed to ffmpeg.

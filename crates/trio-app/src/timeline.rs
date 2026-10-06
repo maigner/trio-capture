@@ -307,7 +307,17 @@ impl Timeline {
                     Color32::WHITE,
                 );
                 let sync = match clip.sync_confidence {
-                    Some(c) => format!("synced to the audio, {:.0}% confidence", c * 100.0),
+                    Some(c) => {
+                        let drift = (clip.speed - 1.0) * 1e6;
+                        if drift.abs() >= 1.0 {
+                            format!(
+                                "synced to the audio, {:.0}% confidence\nclock drift {drift:+.0} ppm, corrected",
+                                c * 100.0
+                            )
+                        } else {
+                            format!("synced to the audio, {:.0}% confidence", c * 100.0)
+                        }
+                    }
                     None => "not synced yet".to_string(),
                 };
                 r.on_hover_text(format!(

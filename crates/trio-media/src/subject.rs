@@ -19,11 +19,11 @@ fn jobs(project: &Project, hwaccel: HwAccel) -> Vec<(usize, f64, DecodeRequest)>
     let mut jobs = Vec::new();
     for cam in 0..CAMERA_COUNT {
         for t in sample_times(project.duration(None)) {
-            if let Some((_, clip)) = project.clip_at(cam, t) {
+            if let Some((_, clip, local)) = project.clip_time(cam, t) {
                 let (width, height) =
                     fit_size(clip.width, clip.height, ANALYSIS_EDGE, ANALYSIS_EDGE);
                 // Every frame must exist, and a seek near the end may find none.
-                let local = (t - clip.offset).min(clip.duration - span - 0.5).max(0.0);
+                let local = local.min(clip.duration - span - 0.5).max(0.0);
                 if local + span > clip.duration {
                     continue;
                 }

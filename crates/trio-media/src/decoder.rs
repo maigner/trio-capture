@@ -2,7 +2,13 @@
 //!
 //! `-ss` before `-i` gives a keyframe seek followed by accurate decode to
 //! the requested start; the `fps` filter resamples variable frame rate
-//! footage onto our fixed timeline. ffmpeg applies rotation metadata itself.
+//! footage onto our fixed timeline. Its `start_time=0` pins output frame
+//! `n` to `n / fps` after the seek point: without it the filter starts
+//! counting at the first decoded frame, so a clip whose video track begins
+//! later than its audio (Android phones: up to a few hundred ms) or whose
+//! first frame after the seek rounds to the next slot would come out early
+//! by that much for the whole stream. ffmpeg applies rotation metadata
+//! itself.
 
 use crate::ffmpeg::{ffmpeg_path, HwAccel};
 use anyhow::{anyhow, Context, Result};
@@ -130,7 +136,7 @@ pub fn grab_frames(req: &DecodeRequest, count: usize, gap: f64) -> Result<Vec<Fr
 impl FrameStream {
     pub fn start(req: DecodeRequest) -> Result<Self> {
         let mut filters = picture_filters(&req);
-        filters.push(format!("fps={}", req.fps));
+        filters.push(format!("fps={}:start_time=0", req.fps));
         let vf = filters.join(",");
 
         let mut cmd = decode_command(&req, &vf);

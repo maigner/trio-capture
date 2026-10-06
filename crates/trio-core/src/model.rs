@@ -60,7 +60,7 @@ impl Project {
             .cameras
             .iter()
             .flat_map(|c| c.clips.iter())
-            .map(|c| c.offset + c.duration)
+            .map(|c| c.end())
             .fold(0.0_f64, f64::max);
         match wav_duration {
             Some(w) if w > 0.0 => w,
@@ -68,14 +68,16 @@ impl Project {
         }
     }
 
-    /// The clip of `camera` covering master time `t`, if any.
+    /// The clip of `camera` showing at master time `t`, if any.
     pub fn clip_at(&self, camera: usize, t: f64) -> Option<(usize, &Clip)> {
-        self.cameras
-            .get(camera)?
-            .clips
-            .iter()
-            .enumerate()
-            .find(|(_, c)| t >= c.offset && t < c.offset + c.duration)
+        self.clip_time(camera, t).map(|(i, c, _)| (i, c))
+    }
+
+    /// The clip of `camera` showing at master time `t` and the seconds into
+    /// that clip to show, honouring the camera's picture delay and the
+    /// clip's clock speed.
+    pub fn clip_time(&self, camera: usize, t: f64) -> Option<(usize, &Clip, f64)> {
+        self.cameras.get(camera)?.clip_at(t)
     }
 
     /// Effective output size honoring the layout orientation.
@@ -99,6 +101,25 @@ pub struct Camera {
     /// Where the people are in this camera's picture, found automatically.
     #[serde(default)]
     pub subject: Option<Subject>,
+    /// Seconds the picture is shown later than the audio sync put it.
+    /// Sound reaches a camera about 3 ms per metre after the picture, and
+    /// the sync lines up what the camera heard, so a camera far from the
+    /// band shows its picture early by that much; this takes it back.
+    #[serde(default)]
+    pub picture_delay: f64,
+}
+
+impl Camera {
+    /// The clip showing at master time `t` and the seconds into it to
+    /// show, honouring the picture delay and each clip's clock speed.
+    pub fn clip_at(&self, t: f64) -> Option<(usize, &Clip, f64)> {
+        let t = t - self.picture_delay;
+        self.clips
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.covers(t))
+            .map(|(i, c)| (i, c, c.local_time(t)))
+    }
 }
 
 /// Where the people are in a camera's picture over time, one sample per
@@ -169,13 +190,30 @@ pub struct Clip {
     pub end_stamped: bool,
     /// Master-timeline seconds at which this clip's first frame appears.
     pub offset: f64,
+    /// Master seconds per clip second, found by the audio sync: the camera's
+    /// clock against the recorder's. 1.0 until the sync measured it; a
+    /// phone typically lands within ±100 ppm (0.0001) of that.
+    #[serde(default = "default_speed")]
+    pub speed: f64,
     /// 0..1, present when auto-sync ran.
     pub sync_confidence: Option<f32>,
 }
 
+fn default_speed() -> f64 {
+    1.0
+}
+
 impl Clip {
+    /// Master time at which the clip ends.
     pub fn end(&self) -> f64 {
-        self.offset + self.duration
+        self.offset + self.duration * self.speed
+    }
+    /// Seconds into the clip that play at master time `t`.
+    pub fn local_time(&self, t: f64) -> f64 {
+        (t - self.offset) / self.speed
+    }
+    pub fn covers(&self, t: f64) -> bool {
+        t >= self.offset && t < self.end()
     }
     pub fn file_name(&self) -> String {
         self.path

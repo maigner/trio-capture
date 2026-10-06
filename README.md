@@ -78,7 +78,11 @@ click. The big blue button in each step is the thing to do there.
    share of chunks that agree. Clips may start before the WAV (negative
    offset) or run past its end. The clips of one camera are then arranged so
    they never overlap; a clip whose audio matches nothing is placed from its
-   recording timestamp next to a matched sibling and shown at 0 %. *Pick the
+   recording timestamp next to a matched sibling and shown at 0 %. The
+   camera's clock is measured against the recorder's as well (phones run a
+   few tens of ppm fast or slow, which adds up to a frame or two over a
+   long set) and each clip is played at the corrected speed; the clip's
+   tooltip on the timeline shows the drift. *Pick the
    folders by hand* holds the per-camera folder and audio file fields for
    shoots that are not in one folder. The app then moves on to the next step.
 2. **Arrange the picture**: choose horizontal or vertical and a preset. The
@@ -95,7 +99,11 @@ click. The big blue button in each step is the thing to do there.
    right; *Show original* compares with the recording, *Back to automatic*
    drops your changes, and double-clicking a slider resets just that one.
    *More* holds shadows, mid-tones and highlights. The grade follows the
-   camera into every slot it occupies.
+   camera into every slot it occupies. *Picture timing* below the sliders
+   shows the camera's picture a few milliseconds later or earlier: the
+   sync lines up what each camera heard, and sound takes about 3 ms per
+   metre to reach a camera, so a camera 10 m from the band shows its
+   picture about 30 ms early until you enter 30 here.
 4. **Export the video**: pick a size (Full HD, 2K, 4K), a format (*Standard*
    H.264 or *Smaller file* H.265) and a quality (Good, Better, Best), choose
    the output file, go. The graphics card encoder is used

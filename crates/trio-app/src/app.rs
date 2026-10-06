@@ -493,6 +493,7 @@ impl App {
             JobResult::Synced { cam, index, result } => {
                 if let Some(clip) = self.project.cameras[cam].clips.get_mut(index) {
                     clip.offset = result.offset;
+                    clip.speed = result.speed;
                     clip.sync_confidence = Some(result.confidence);
                     if result.placement != Placement::Audio {
                         self.sync_unmatched.push(clip.file_name().to_string());

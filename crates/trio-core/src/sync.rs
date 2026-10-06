@@ -38,6 +38,24 @@ const MAX_CANDIDATES: usize = 4;
 const CORROBORATION: usize = 3;
 /// Candidates below this confidence are not used to place a clip.
 pub const MIN_CONFIDENCE: f32 = 0.25;
+/// Clock drift beyond this (500 ppm) is not drift but a wrong match.
+const MAX_DRIFT: f64 = 5e-4;
+/// Raw-PCM refinement: stretches of the clip that each contribute one
+/// exact lag, and how far around the envelope result each one searches.
+const REFINE_BANDS: usize = 8;
+const REFINE_RADIUS: i64 = 4 * HOP as i64;
+/// Exact lags this far apart in clip time can measure the clock speed.
+const MIN_DRIFT_SPAN: f64 = 60.0;
+/// An exact lag this far off the fitted line is a bad peak, not drift. In
+/// a room the camera hears whichever instrument is loudest, each at its
+/// own distance, so genuine lags scatter by a few tens of milliseconds.
+const MAX_RESIDUAL: f64 = 0.025;
+/// Prior on the clock speed when pooling a camera's clips: lags scatter
+/// by about `DRIFT_PRIOR_LAG` and a phone's drift is within about
+/// `DRIFT_PRIOR_PPM`, so a short clip alone barely moves the speed and a
+/// long one sets it.
+const DRIFT_PRIOR_LAG: f64 = 0.01;
+const DRIFT_PRIOR_PPM: f64 = 50.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SyncResult {
@@ -45,6 +63,12 @@ pub struct SyncResult {
     pub offset: f64,
     /// 0..1: share of the clip's chunks that agree on this offset.
     pub confidence: f32,
+    /// Master seconds per clip second (1.0 = the clocks agree).
+    pub speed: f64,
+    /// How well `speed` is pinned down: the spread (sum of squared clip
+    /// times about their mean, in s²) of the exact lags it was fitted
+    /// through; 0 when it was not measured.
+    pub speed_weight: f64,
 }
 
 /// The master WAV, prepared once for matching many clips against it.
@@ -244,9 +268,9 @@ impl Master {
                 used[j] = true;
             }
 
-            // Offset at the clip start: robust line fit through the members
-            // absorbs clock drift; a lone member just gives its own value.
-            let offset = fit_offset_at_start(votes, &members);
+            // Offset at the clip start and the drift along it: robust line
+            // fit through the members; a lone member just gives its own value.
+            let (offset, slope) = fit_votes(votes, &members);
 
             // Confidence: matching share of the chunks that could overlap the master.
             let overlapping: Vec<usize> = (0..votes.len())
@@ -270,80 +294,175 @@ impl Master {
                 ((members.len() as f32 - 1.0) / (CORROBORATION as f32 - 1.0)).clamp(0.0, 1.0);
             let confidence = share * corroboration;
 
-            let offset = self.refine(clip, votes, &members, offset);
-            out.push(SyncResult { offset, confidence });
+            // Only candidates that can place a clip are worth the raw-PCM pass.
+            let (offset, speed, speed_weight) = if confidence >= MIN_CONFIDENCE {
+                self.refine(clip, votes, &members, offset, slope)
+            } else {
+                (offset, 1.0 + slope, 0.0)
+            };
+            out.push(SyncResult {
+                offset,
+                confidence,
+                speed,
+                speed_weight,
+            });
         }
         out.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
         out
     }
 
-    /// Sub-frame precision: correlate raw PCM of the strongest matching
-    /// chunks in a ±20 ms window around the envelope result.
-    fn refine(&self, clip: &[f32], votes: &[ChunkVote], members: &[usize], offset: f64) -> f64 {
-        let mut strongest: Vec<usize> = members.to_vec();
-        strongest.sort_by(|&a, &b| votes[b].score.partial_cmp(&votes[a].score).unwrap());
-        strongest.truncate(3);
-        if strongest.is_empty() {
-            return offset;
-        }
+    /// Sub-frame precision and clock speed. The strongest matching chunk in
+    /// each of a few stretches of the clip is correlated as raw PCM in a
+    /// ±40 ms window around where the envelope line fit expects it; a line
+    /// through the exact lags found gives the offset at the clip start and
+    /// the drift along it. Returns `(offset, speed, speed_weight)`.
+    fn refine(
+        &self,
+        clip: &[f32],
+        votes: &[ChunkVote],
+        members: &[usize],
+        offset: f64,
+        slope: f64,
+    ) -> (f64, f64, f64) {
         let rate = SYNC_RATE as f64;
+        let clip_len = clip.len() as f64 / rate;
+        let picks: Vec<usize> = (0..REFINE_BANDS)
+            .filter_map(|b| {
+                let lo = clip_len * b as f64 / REFINE_BANDS as f64;
+                let hi = clip_len * (b + 1) as f64 / REFINE_BANDS as f64;
+                members
+                    .iter()
+                    .copied()
+                    .filter(|&j| votes[j].at >= lo && votes[j].at < hi)
+                    .max_by(|&a, &b| votes[a].score.partial_cmp(&votes[b].score).unwrap())
+            })
+            .collect();
         let seg_len = 10 * SYNC_RATE as usize;
-        let center = (offset * rate).round() as i64;
-        let radius = 2 * HOP as i64;
         let master = &self.pcm;
-        let mut best = (center, f32::MIN);
-        for lag in (center - radius)..=(center + radius) {
-            let mut total = 0.0f32;
-            let mut n = 0usize;
-            for &j in &strongest {
-                let a0 = (votes[j].at * rate) as usize;
-                let a1 = (a0 + seg_len).min(clip.len());
-                for i in a0..a1 {
-                    let k = i as i64 + lag;
-                    if k < 0 || k >= master.len() as i64 {
-                        continue;
-                    }
-                    total += clip[i] * master[k as usize];
-                    n += 1;
+        // (clip time, exact lag in seconds, normalized peak)
+        let mut points: Vec<(f64, f64, f64)> = Vec::new();
+        for j in picks {
+            let at = votes[j].at;
+            let a0 = (at * rate) as usize;
+            let a1 = (a0 + seg_len).min(clip.len());
+            if a1 <= a0 {
+                continue;
+            }
+            let seg = &clip[a0..a1];
+            let center = ((offset + slope * at) * rate).round() as i64;
+            let mut best: Option<(i64, f32)> = None;
+            for lag in (center - REFINE_RADIUS)..=(center + REFINE_RADIUS) {
+                let k0 = a0 as i64 + lag;
+                let k1 = a1 as i64 + lag;
+                if k0 < 0 || k1 > master.len() as i64 {
+                    continue;
+                }
+                let m = &master[k0 as usize..k1 as usize];
+                let v: f32 = seg.iter().zip(m).map(|(a, b)| a * b).sum();
+                if best.map(|b| v > b.1).unwrap_or(true) {
+                    best = Some((lag, v));
                 }
             }
-            if n > 0 {
-                let v = total / n as f32;
-                if v > best.1 {
-                    best = (lag, v);
-                }
-            }
+            let Some((lag, peak)) = best else { continue };
+            let k0 = (a0 as i64 + lag) as usize;
+            let ea: f32 = seg.iter().map(|x| x * x).sum();
+            let em: f32 = master[k0..k0 + seg.len()].iter().map(|x| x * x).sum();
+            let weight = (peak / (ea * em).sqrt().max(1e-9)).max(0.0) as f64;
+            points.push((at, lag as f64 / rate, weight));
         }
-        best.0 as f64 / rate
+        if points.is_empty() {
+            return (offset, 1.0 + slope, 0.0);
+        }
+
+        // Line through the exact lags; a lag far off the line is a wrong
+        // peak and is dropped. Speed needs lags spread over the clip.
+        loop {
+            let span = points.iter().map(|p| p.0).fold(f64::MIN, f64::max)
+                - points.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+            let (b0, b1) = if points.len() >= 3 && span >= MIN_DRIFT_SPAN {
+                weighted_line(&points)
+            } else {
+                let w: f64 = points.iter().map(|p| p.2).sum::<f64>().max(1e-9);
+                let b0 = points
+                    .iter()
+                    .map(|p| (p.1 - slope * p.0) * p.2)
+                    .sum::<f64>()
+                    / w;
+                (b0, slope)
+            };
+            let worst = points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i, (p.1 - (b0 + b1 * p.0)).abs()))
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
+            if points.len() > 2 && worst.1 > MAX_RESIDUAL {
+                points.remove(worst.0);
+                continue;
+            }
+            for p in &points {
+                tracing::debug!(
+                    "refine: at {:>7.1}s lag {:.4}s (line {:+.1} ms) corr {:.2}",
+                    p.0,
+                    p.1,
+                    (p.1 - (b0 + b1 * p.0)) * 1e3,
+                    p.2
+                );
+            }
+            if b1.abs() > MAX_DRIFT {
+                // Not drift: keep the envelope's verdict for the slope.
+                let w: f64 = points.iter().map(|p| p.2).sum::<f64>().max(1e-9);
+                let b0 = points
+                    .iter()
+                    .map(|p| (p.1 - slope * p.0) * p.2)
+                    .sum::<f64>()
+                    / w;
+                return (b0, 1.0 + slope, 0.0);
+            }
+            let weight = if points.len() >= 3 && span >= MIN_DRIFT_SPAN {
+                let mx = points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64;
+                points.iter().map(|p| (p.0 - mx).powi(2)).sum()
+            } else {
+                0.0
+            };
+            return (b0, 1.0 + b1, weight);
+        }
     }
 }
 
-/// Offset at clip time 0 from a set of votes. Least squares in `at` when
-/// there are enough members and the slope is plausible drift, else median.
-fn fit_offset_at_start(votes: &[ChunkVote], members: &[usize]) -> f64 {
+/// Weighted least squares `lag = b0 + b1 * at` through `(at, lag, weight)`.
+fn weighted_line(points: &[(f64, f64, f64)]) -> (f64, f64) {
+    let w: f64 = points.iter().map(|p| p.2).sum::<f64>().max(1e-9);
+    let mx = points.iter().map(|p| p.0 * p.2).sum::<f64>() / w;
+    let my = points.iter().map(|p| p.1 * p.2).sum::<f64>() / w;
+    let sxy: f64 = points.iter().map(|p| p.2 * (p.0 - mx) * (p.1 - my)).sum();
+    let sxx: f64 = points.iter().map(|p| p.2 * (p.0 - mx).powi(2)).sum();
+    if sxx <= 0.0 {
+        return (my, 0.0);
+    }
+    let b1 = sxy / sxx;
+    (my - b1 * mx, b1)
+}
+
+/// Offset at clip time 0 and its slope (seconds of drift per clip second)
+/// from a set of votes. Least squares in `at` when there are enough
+/// members and the slope is plausible drift, else the median and no drift.
+fn fit_votes(votes: &[ChunkVote], members: &[usize]) -> (f64, f64) {
     let mut offs: Vec<f64> = members.iter().map(|&j| votes[j].offset).collect();
     offs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = offs[offs.len() / 2];
     if members.len() < 4 {
-        return median;
+        return (median, 0.0);
     }
-    let n = members.len() as f64;
-    let mx = members.iter().map(|&j| votes[j].at).sum::<f64>() / n;
-    let my = members.iter().map(|&j| votes[j].offset).sum::<f64>() / n;
-    let sxy: f64 = members
+    let points: Vec<(f64, f64, f64)> = members
         .iter()
-        .map(|&j| (votes[j].at - mx) * (votes[j].offset - my))
-        .sum();
-    let sxx: f64 = members.iter().map(|&j| (votes[j].at - mx).powi(2)).sum();
-    if sxx <= 0.0 {
-        return median;
+        .map(|&j| (votes[j].at, votes[j].offset, 1.0))
+        .collect();
+    let (b0, b1) = weighted_line(&points);
+    if b1.abs() > MAX_DRIFT {
+        return (median, 0.0);
     }
-    let slope = sxy / sxx;
-    // More than 500 ppm is not clock drift; trust the median instead.
-    if slope.abs() > 5e-4 {
-        return median;
-    }
-    my - slope * mx
+    (b0, b1)
 }
 
 /// RMS envelope in the log domain so quiet passages still count.
@@ -388,6 +507,8 @@ pub enum Placement {
 pub struct Arranged {
     pub offset: f64,
     pub confidence: f32,
+    /// Master seconds per clip second; 1.0 unless measured by audio.
+    pub speed: f64,
     pub placement: Placement,
 }
 
@@ -486,15 +607,33 @@ pub fn arrange(
             Some(ci) => Arranged {
                 offset: usable[i][ci].offset,
                 confidence: usable[i][ci].confidence,
+                speed: usable[i][ci].speed,
                 placement: Placement::Audio,
             },
             None => Arranged {
                 offset: current.get(i).copied().unwrap_or(0.0),
                 confidence: 0.0,
+                speed: 1.0,
                 placement: Placement::Unknown,
             },
         })
         .collect();
+    // One clock per camera: pool the measured drifts, each weighted by how
+    // well its clip pinned it down, shrunk toward no drift by the prior.
+    let prior = (DRIFT_PRIOR_LAG / (DRIFT_PRIOR_PPM * 1e-6)).powi(2);
+    let (mut num, mut den) = (0.0, prior);
+    for (i, ci) in chosen.iter().enumerate() {
+        if let Some(ci) = ci {
+            let r = usable[i][*ci];
+            num += r.speed_weight * (r.speed - 1.0);
+            den += r.speed_weight;
+        }
+    }
+    let speed = 1.0 + num / den;
+    for o in &mut out {
+        o.speed = speed;
+    }
+
     let placed: Vec<usize> = (0..n).filter(|&i| chosen[i].is_some()).collect();
     for i in 0..n {
         if chosen[i].is_some() || placed.is_empty() {
@@ -519,6 +658,7 @@ pub fn arrange(
         out[i] = Arranged {
             offset,
             confidence: 0.0,
+            speed,
             placement: Placement::Timestamp,
         };
     }
@@ -646,6 +786,33 @@ mod tests {
     }
 
     #[test]
+    fn measures_clock_drift() {
+        // Camera clock 120 ppm slow: every clip second holds 1.00012 master
+        // seconds, 36 ms over the 300 s clip. Offset and speed must both
+        // come back, and the offset must not be pulled by the drift.
+        let rate = SYNC_RATE as usize;
+        let master = music(400 * rate, 21);
+        let speed = 1.00012;
+        let start = 30.0;
+        let n = 300 * rate;
+        let clip: Vec<f32> = (0..n)
+            .map(|i| {
+                let x = (start + i as f64 / rate as f64 * speed) * rate as f64;
+                let k = x.floor() as usize;
+                let f = (x - k as f64) as f32;
+                master[k] * (1.0 - f) + master[k + 1] * f
+            })
+            .collect();
+        let r = find_offset(&clip, &master).unwrap();
+        assert!((r.offset - start).abs() < 0.002, "offset {}", r.offset);
+        assert!((r.speed - speed).abs() < 5e-6, "speed {}", r.speed);
+        assert!(r.confidence > 0.8, "confidence {}", r.confidence);
+        // No drift reads as no drift.
+        let r = find_offset(&master[20 * rate..200 * rate], &master).unwrap();
+        assert!((r.speed - 1.0).abs() < 2e-6, "speed {}", r.speed);
+    }
+
+    #[test]
     fn repeated_song_does_not_fool_the_vote() {
         // Master = A B A' where A' repeats A; clip = A B, which only fits at 0.
         let rate = SYNC_RATE as usize;
@@ -680,15 +847,21 @@ mod tests {
                 SyncResult {
                     offset: 300.0,
                     confidence: 0.5,
+                    speed: 1.0,
+                    speed_weight: 0.0,
                 },
                 SyncResult {
                     offset: 200.0,
                     confidence: 0.4,
+                    speed: 1.0,
+                    speed_weight: 0.0,
                 },
             ],
             vec![SyncResult {
                 offset: 320.0,
                 confidence: 0.9,
+                speed: 1.0,
+                speed_weight: 0.0,
             }],
         ];
         let r = arrange(&clips, &cands, &[0.0, 0.0], 10_000.0);
@@ -744,14 +917,20 @@ mod tests {
             vec![SyncResult {
                 offset: 60.0,
                 confidence: 1.0,
+                speed: 1.0,
+                speed_weight: 0.0,
             }],
             vec![SyncResult {
                 offset: -20.0,
                 confidence: 0.7,
+                speed: 1.0,
+                speed_weight: 0.0,
             }],
             vec![SyncResult {
                 offset: 40.0,
                 confidence: 1.0,
+                speed: 1.0,
+                speed_weight: 0.0,
             }],
         ];
         let r = arrange(&clips, &cands, &[0.0, 0.0, 0.0], 1600.0);
@@ -780,6 +959,8 @@ mod tests {
             vec![SyncResult {
                 offset: 500.0,
                 confidence: 0.7,
+                speed: 1.0,
+                speed_weight: 0.0,
             }],
         ];
         let r = arrange(&clips, &cands, &[0.0, 0.0], 10_000.0);
@@ -829,6 +1010,7 @@ mod tests {
             creation_time: Some(ct.into()),
             end_stamped: true,
             offset: 0.0,
+            speed: 1.0,
             sync_confidence: None,
         };
         // Android: names hold the local start, stamps the UTC end.

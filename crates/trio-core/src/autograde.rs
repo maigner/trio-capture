@@ -582,6 +582,7 @@ mod tests {
             creation_time: None,
             end_stamped: false,
             offset,
+            speed: 1.0,
             sync_confidence: None,
         };
         p.cameras[0].clips = vec![clip(0.0, 100.0)];

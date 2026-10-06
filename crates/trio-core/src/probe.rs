@@ -82,6 +82,7 @@ fn parse_probe(path: &Path, v: &Value) -> Result<Clip> {
         creation_time,
         end_stamped,
         offset: 0.0,
+        speed: 1.0,
         sync_confidence: None,
     })
 }

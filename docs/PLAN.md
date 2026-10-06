@@ -504,3 +504,43 @@ is left alone rather than re-centred on something that cannot be shown. The find
 project without boxes is opened; the Arrange step shows its progress, and
 the preview draws the face box in yellow while arranging. `trio-capture
 people <project>` runs it from the command line.
+
+## Lip sync (2026-10-06, "funken und von oben" shoot)
+
+The pictures ran visibly ahead of the sound although the audio match was
+right to a millisecond. Four causes, all fixed:
+
+- **Decoder frame numbering.** `FrameStream` labels output frame `n` as
+  `start + n / fps`, but ffmpeg's `fps` filter starts counting at the first
+  frame it decodes. An Android clip's video track begins up to 0.2 s after
+  its audio track (the pts of the first frame), so a decoder started at the
+  clip's beginning handed out every frame 6 frames early for the whole
+  stream; and whenever the first frame after a seek rounded to the next
+  output slot, a 30 fps phone clip came out one frame early. `fps=F:start_time=0`
+  pins slot `n` to `n / F` after the seek point (the first real frame is
+  repeated to fill the gap) in `FrameStream` and `grab_frames`.
+- **Clock drift.** `Clip.speed` (master seconds per clip second, serde
+  default 1.0) is measured by the sync: the raw-PCM refinement now takes the
+  strongest chunk in each of eight stretches of the clip, finds each one's
+  exact lag in a ±40 ms window around the envelope line fit, and fits a
+  line through them (lags more than 25 ms off the line are bad peaks and
+  dropped). The exact lags scatter by 10 to 20 ms because the camera hears
+  whichever instrument is loudest, each at its own distance, so one clip
+  alone pins the speed to only a few tens of ppm; `arrange` pools the clips
+  of a camera (one clock) weighted by `speed_weight`, the spread of each
+  fit, shrunk toward 1.0 by a prior of 50 ppm. On the shoot above the three
+  cameras come out at -34, -32 and -19 ppm, consistent across their clips.
+  `Clip::end`, `Clip::local_time` and `Project::clip_time` apply the speed;
+  the engine, the grade and subject samplers use `clip_time`.
+- **Sound travel.** The sync lines up what the camera heard, which is
+  3 ms per metre late, so the picture of a distant camera is early by that.
+  `Camera.picture_delay` (seconds, serde default 0) shifts the camera's
+  picture; the colour step has a *Picture timing* slider in ms for it.
+- **Preview clock.** `Player::position` counted frames handed to cpal,
+  so the picture led the sound by the device's output latency (Bluetooth:
+  150 to 250 ms). It now subtracts the latency the device reports in each
+  callback (`OutputCallbackInfo::timestamp`), never reading below the last
+  seek. Exports were never affected by this one.
+
+`trio-capture sync` prints the drift per clip. Lags found by the refinement
+are logged at `RUST_LOG=trio_core=debug`.

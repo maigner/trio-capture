@@ -116,6 +116,7 @@ mod tests {
             creation_time: None,
             end_stamped: false,
             offset: 0.0,
+            speed: 1.0,
             sync_confidence: None,
         }
     }

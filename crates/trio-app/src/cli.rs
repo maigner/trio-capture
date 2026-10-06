@@ -122,12 +122,14 @@ fn cmd_sync(args: &[String]) -> Result<()> {
                 Placement::Unknown => "  (no audio match, offset unchanged)",
             };
             println!(
-                "{:<28} offset {:>9.3}s  confidence {:.2}{note}",
+                "{:<28} offset {:>9.3}s  confidence {:.2}  drift {:+.0} ppm{note}",
                 clip.file_name(),
                 r.offset,
-                r.confidence
+                r.confidence,
+                (r.speed - 1.0) * 1e6
             );
             clip.offset = r.offset;
+            clip.speed = r.speed;
             clip.sync_confidence = Some(r.confidence);
         }
     }

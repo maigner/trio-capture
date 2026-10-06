@@ -26,11 +26,11 @@ pub fn auto_grade(
     let mut jobs = Vec::new();
     for cam in 0..CAMERA_COUNT {
         for &t in &times {
-            if let Some((_, clip)) = project.clip_at(cam, t) {
+            if let Some((_, clip, local)) = project.clip_time(cam, t) {
                 let (width, height) =
                     fit_size(clip.width, clip.height, ANALYSIS_EDGE, ANALYSIS_EDGE);
                 // Stay clear of the very end, where a seek may find no frame.
-                let local = (t - clip.offset).min(clip.duration - 0.5).max(0.0);
+                let local = local.min(clip.duration - 0.5).max(0.0);
                 jobs.push((
                     cam,
                     visible_region(project, cam, clip.width, clip.height),

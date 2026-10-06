@@ -129,7 +129,7 @@ impl StreamSet {
     pub fn advance(&mut self, project: &Project, t: f64, mode: Mode) {
         let half = 0.5 / self.fps;
         for cam in 0..CAMERA_COUNT {
-            let Some((idx, clip)) = project.clip_at(cam, t) else {
+            let Some((idx, clip, local)) = project.clip_time(cam, t) else {
                 let st = &mut self.cams[cam];
                 st.drop_stream();
                 if st.current.is_some() {
@@ -140,7 +140,6 @@ impl StreamSet {
                 continue;
             };
             let clip = clip.clone();
-            let local = t - clip.offset;
             let (w, h) = self.decode_size(&clip);
             let st = &mut self.cams[cam];
 
@@ -367,10 +366,10 @@ mod tests {
             let started = Instant::now();
             loop {
                 set.advance(&project, t, Mode::Live);
-                let done = (0..CAMERA_COUNT).all(|cam| match project.clip_at(cam, t) {
-                    Some((_, c)) => set
+                let done = (0..CAMERA_COUNT).all(|cam| match project.clip_time(cam, t) {
+                    Some((_, _, local)) => set
                         .current(cam)
-                        .map(|f| (f.time - (t - c.offset)).abs() <= half + 1e-6)
+                        .map(|f| (f.time - local).abs() <= half + 1e-6)
                         .unwrap_or(false),
                     None => true,
                 });
