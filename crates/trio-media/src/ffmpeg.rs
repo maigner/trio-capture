@@ -55,11 +55,15 @@ impl HwAccel {
             HwAccel::Vaapi => vec!["-hwaccel", "vaapi"],
             HwAccel::VaapiGpuScale => vec!["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"],
             HwAccel::VideoToolbox => vec!["-hwaccel", "videotoolbox"],
+            // The hardware pixel format is called `videotoolbox_vld` in
+            // ffmpeg; "videotoolbox" is rejected, and the detection then
+            // fell back to downloading 4K frames and scaling them on the
+            // processor, which does not keep up with 4K60 footage.
             HwAccel::VideoToolboxGpuScale => vec![
                 "-hwaccel",
                 "videotoolbox",
                 "-hwaccel_output_format",
-                "videotoolbox",
+                "videotoolbox_vld",
             ],
         }
     }

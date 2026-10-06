@@ -540,7 +540,22 @@ right to a millisecond. Four causes, all fixed:
   so the picture led the sound by the device's output latency (Bluetooth:
   150 to 250 ms). It now subtracts the latency the device reports in each
   callback (`OutputCallbackInfo::timestamp`), never reading below the last
-  seek. Exports were never affected by this one.
+  seek. The reported latency jitters by a few milliseconds between
+  callbacks, and a clock that steps back by half a frame makes the engine
+  restart every decoder (that pegged the CPU on first try), so the position
+  only ever moves forward until the next seek. Exports were never affected
+  by this one.
 
 `trio-capture sync` prints the drift per clip. Lags found by the refinement
 are logged at `RUST_LOG=trio_core=debug`.
+
+**Preview lag on macOS (2026-10-06).** The GoPro's picture trailed the
+sound by up to 1.5 s and then jumped (the engine's `MAX_AHEAD_SECONDS`
+restart) whatever the preview quality, because `detect_hwaccel` never
+accepted the "VideoToolbox + GPU scaling" path: ffmpeg names the hardware
+pixel format `videotoolbox_vld`, not `videotoolbox`. The fallback decodes
+on the GPU but downloads every 4K frame and scales it on the processor,
+27 fps for 4K60 HEVC on an Intel MacBook; with `scale_vt` on the GPU the
+same clip decodes at 46 fps, the phones at about 140. The decode size does
+not change the cost, the 4K60 decode itself is the bottleneck. Exports use
+the same path and gain the same.

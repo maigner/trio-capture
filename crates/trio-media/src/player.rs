@@ -17,8 +17,11 @@ struct Shared {
     /// good fraction of a second behind, and the picture must not run
     /// ahead of the sound by that.
     latency: AtomicU64,
-    /// Frame of the last seek; the heard position never reads below it.
-    floor: AtomicU64,
+    /// The position last reported, in frames. The reported latency jitters
+    /// by a few milliseconds between callbacks, and a clock that steps back
+    /// by half a frame makes the engine restart every decoder, so the
+    /// position only ever moves forward until the next seek.
+    heard: AtomicU64,
     playing: AtomicBool,
     channels: usize,
 }
@@ -47,7 +50,7 @@ impl Player {
             pcm: RwLock::new(Arc::new(Vec::new())),
             pos: AtomicU64::new(0),
             latency: AtomicU64::new(0),
-            floor: AtomicU64::new(0),
+            heard: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             channels: channels as usize,
         });
@@ -88,7 +91,7 @@ impl Player {
     pub fn set_pcm(&self, pcm: Arc<Vec<f32>>) {
         *self.shared.pcm.write().unwrap() = pcm;
         self.shared.pos.store(0, Ordering::SeqCst);
-        self.shared.floor.store(0, Ordering::SeqCst);
+        self.shared.heard.store(0, Ordering::SeqCst);
     }
 
     pub fn has_audio(&self) -> bool {
@@ -112,15 +115,17 @@ impl Player {
     pub fn seek(&self, seconds: f64) {
         let frame = (seconds.max(0.0) * self.rate as f64) as u64;
         self.shared.pos.store(frame, Ordering::SeqCst);
-        self.shared.floor.store(frame, Ordering::SeqCst);
+        self.shared.heard.store(frame, Ordering::SeqCst);
     }
     /// What is coming out of the speakers right now: frames handed to the
-    /// device less its reported output latency.
+    /// device less its reported output latency, never below the last seek
+    /// and never behind the previous reading.
     pub fn position(&self) -> f64 {
         let handed = self.shared.pos.load(Ordering::SeqCst);
         let latency = self.shared.latency.load(Ordering::Relaxed);
-        let floor = self.shared.floor.load(Ordering::SeqCst);
-        handed.saturating_sub(latency).max(floor) as f64 / self.rate as f64
+        let now = handed.saturating_sub(latency);
+        let before = self.shared.heard.fetch_max(now, Ordering::SeqCst);
+        now.max(before) as f64 / self.rate as f64
     }
     /// Output latency the device reports, in seconds.
     pub fn latency(&self) -> f64 {
